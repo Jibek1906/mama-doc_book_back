@@ -1,0 +1,68 @@
+services:
+  backend:
+    build:
+      context: app
+      dockerfile: Dockerfile.prod
+    container_name: book_backend
+    env_file:
+      - .env.prod
+    restart: always
+    command: ./app_entrypoint.prod.sh
+    expose:
+      - "8000"
+    volumes:
+      - static_volume:/app/static
+      - media_volume:/app/media
+    depends_on:
+      database:
+        condition: service_healthy
+
+  database:
+    image: postgres:16.2-alpine3.18
+    container_name: book_postgres
+    env_file:
+      - .env.prod
+    restart: always
+    volumes:
+      - database-storage:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build:
+      context: ../book_front
+      dockerfile: Dockerfile.prod
+    container_name: book_frontend
+    restart: always
+    expose:
+      - "3000"
+    environment:
+      - NEXT_PUBLIC_API_BASE_URL=/api/v1
+
+  nginx:
+    build: nginx
+    container_name: book_nginx
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - static_volume:/app/static
+      - media_volume:/app/media
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - default
+      - book_network
+
+volumes:
+  database-storage:
+  static_volume:
+  media_volume:
+
+networks:
+  book_network:
+    external: true

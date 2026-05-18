@@ -1,0 +1,37 @@
+services:
+  book-backend:
+    build: app
+    command: sh ./app_entrypoint.dev.sh
+    env_file:
+      - .env.dev
+    restart: unless-stopped
+    volumes:
+      - ./app:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      book-db:
+        condition: service_healthy
+
+  book-db:
+    image: postgres:16.2-alpine3.18
+    env_file: .env.dev
+    restart: unless-stopped
+    ports:
+      - "5555:5432"
+    volumes:
+      - book-db-storage:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  book-db-storage:
+
+networks:
+  default:
+    name: book_network
+    external: true
