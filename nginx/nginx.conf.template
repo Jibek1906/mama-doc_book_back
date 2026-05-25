@@ -1,0 +1,143 @@
+worker_processes 1;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+
+    # allow bigger uploads (admin: images/files)
+    client_max_body_size 20m;
+
+    sendfile        on;
+    keepalive_timeout  65;
+
+    upstream backend {
+        server backend:8000;
+    }
+
+    upstream frontend {
+        server frontend:3000;
+    }
+
+    # --- HTTP (80): used for Let's Encrypt HTTP-01 challenge + redirect to HTTPS ---
+    server {
+        listen 80;
+        server_name ${DOMAIN};
+
+        # ACME challenge
+        location /.well-known/acme-challenge/ {
+            root /var/www/certbot;
+        }
+
+        # allow certbot to check without redirect issues
+        location = /healthz {
+            return 200 'ok';
+            add_header Content-Type text/plain;
+        }
+
+        # redirect everything else to https
+        location / {
+            return 301 https://$host$request_uri;
+        }
+    }
+
+    # --- HTTPS (443): main traffic ---
+    server {
+        listen 443 ssl;
+        server_name ${DOMAIN};
+
+        ssl_certificate     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
+
+        # modern TLS defaults
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_prefer_server_ciphers off;
+
+        # static/media from volumes collected by backend
+        location /static/ {
+            alias /app/static/;
+        }
+
+        location /media/ {
+            alias /app/media/;
+        }
+
+        # FRONT
+        location / {
+            proxy_pass http://frontend;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-Host $host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+        }
+
+        # BACK
+        location /api/ {
+            # Accept both with and without trailing slash for /api/v1/* (spec has no trailing slash).
+            # Internal rewrite (no redirect to client) so POST won't lose body.
+            rewrite ^(/api/v1/.+[^/])$ $1/ break;
+            proxy_pass http://backend;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+
+        # Swagger UI (spec requires /docs)
+        location = /docs {
+            return 301 /docs/;
+        }
+        location /docs/ {
+            proxy_pass http://backend;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+
+        # Compatibility with spec base URL: https://<domain>/v1/...  ->  /api/v1/...
+        location /v1/ {
+            rewrite ^/v1/(.*)$ /api/v1/$1 break;
+            # ensure trailing slash for DRF (internal)
+            rewrite ^(/api/v1/.+[^/])$ $1/ break;
+            proxy_pass http://backend;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+
+        location /admin/ {
+            proxy_pass http://backend;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+
+        location = /pro-cabinet {
+            return 301 /pro-cabinet/;
+        }
+
+        location /pro-cabinet/ {
+            proxy_pass http://backend;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+
+        # PRO UI (canonical)
+        location = /pro {
+            return 301 /pro/;
+        }
+
+        location /pro/ {
+            proxy_pass http://backend;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+    }
+}

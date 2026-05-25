@@ -1,6 +1,7 @@
 #!/bin/sh
 set -e
 
+python manage.py rename_clinic_app_to_organizations || true
 python manage.py migrate --noinput
 python manage.py ensure_admin
 

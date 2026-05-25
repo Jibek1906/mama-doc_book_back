@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django.http import HttpResponseNotFound
 from django.urls import include, path
 
 from django.conf import settings
@@ -20,9 +21,21 @@ class HiddenSpectacularAPIView(SpectacularAPIView):
 class HiddenSpectacularJSONAPIView(SpectacularJSONAPIView):
     schema = None
 
+from django.views.generic import TemplateView
+
 urlpatterns = [
+    # Legacy admin URLs must not exist anymore
+    path("admin/clinic/", lambda request: HttpResponseNotFound("Not Found")),
+    path("admin/clinic/<path:path>", lambda request, path: HttpResponseNotFound("Not Found")),
     path("admin/", admin.site.urls),
+    # PRO UI
+    # canonical: /pro/ (requested), keep /pro-cabinet/ for backward compatibility
+    path("pro/", TemplateView.as_view(template_name="pro_cabinet.html"), name="pro"),
+    path("pro-cabinet/", TemplateView.as_view(template_name="pro_cabinet.html"), name="pro-cabinet"),
     path("api/", include("api.urls")),
+    # Spec-compatible base path: /v1/* (same as /api/v1/*)
+    # Enabled by default so frontend/integrations can safely use either prefix.
+    path("v1/", include("api.v1.urls")),
     # schema: оставляем YAML по умолчанию + добавляем JSON для Swagger UI
     path("api/schema/", HiddenSpectacularAPIView.as_view(), name="schema"),
     path("api/schema.json", HiddenSpectacularJSONAPIView.as_view(), name="schema-json"),
@@ -30,6 +43,11 @@ urlpatterns = [
         "api/docs/",
         SpectacularSwaggerView.as_view(url_name="schema-json"),
         name="swagger-ui",
+    ),
+    path(
+        "docs/",
+        SpectacularSwaggerView.as_view(url_name="schema-json"),
+        name="swagger-ui-alias",
     ),
 ]
 

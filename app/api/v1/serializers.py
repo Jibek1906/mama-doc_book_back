@@ -1,6 +1,45 @@
 from rest_framework import serializers
 
-from apps.clinic.models import Booking, Doctor, PhoneCountry, Review, Service, Specialist
+from django.conf import settings
+
+from .utils import is_supported_phone, normalize_phone
+
+from apps.organizations.models import Booking, Professional, PhoneCountry, Review, Service, Specialist, ProjectFeatureSettings
+from apps.organizations.models import ProfessionalSchedule, ScheduleException
+
+
+class GenderInputField(serializers.Field):
+    """Accept gender as either boolean or string and normalize to 'male'/'female'.
+
+    - boolean: true -> 'male', false -> 'female'
+    - string: 'male'/'female' (case-insensitive)
+    """
+
+    default_error_messages = {
+        "invalid": "gender должно быть boolean (true/false) или строкой 'male'/'female'",
+    }
+
+    def to_internal_value(self, data):
+        if data is None or data == "":
+            return None
+
+        if isinstance(data, bool):
+            return "male" if data else "female"
+
+        if isinstance(data, str):
+            v = data.strip().lower()
+            if v in {"male", "m", "man", "м", "муж", "мужской"}:
+                return "male"
+            if v in {"female", "f", "woman", "ж", "жен", "женский"}:
+                return "female"
+
+        self.fail("invalid")
+
+    def to_representation(self, value):
+        # For output (if ever used) keep canonical values.
+        if not value:
+            return ""
+        return str(value)
 
 
 class ApiErrorSerializer(serializers.Serializer):
@@ -10,6 +49,8 @@ class ApiErrorSerializer(serializers.Serializer):
 
 
 class SpecialistSerializer(serializers.ModelSerializer):
+    icon_url = serializers.SerializerMethodField()
+
     class Meta:
         model = Specialist
         fields = (
@@ -22,13 +63,27 @@ class SpecialistSerializer(serializers.ModelSerializer):
             "sort_order",
         )
 
+    def get_icon_url(self, obj: Specialist) -> str:
+        request = self.context.get("request")
+        if obj.icon_url:
+            raw = str(obj.icon_url)
+            # Если в БД лежит путь до static (seed), не добавляем /media/
+            if raw.startswith("/static/") or raw.startswith("static/"):
+                path = raw if raw.startswith("/") else f"/{raw}"
+                return request.build_absolute_uri(path) if request else path
 
-class DoctorPreviewSerializer(serializers.ModelSerializer):
+            url = obj.icon_url.url
+            return request.build_absolute_uri(url) if request else url
+        return ""
+
+
+class ProfessionalPreviewSerializer(serializers.ModelSerializer):
     specialty = serializers.SerializerMethodField()
     rating = serializers.SerializerMethodField()
+    photo_url = serializers.SerializerMethodField()
 
     class Meta:
-        model = Doctor
+        model = Professional
         fields = (
             "id",
             "full_name",
@@ -36,29 +91,49 @@ class DoctorPreviewSerializer(serializers.ModelSerializer):
             "specialty",
             "rating",
             "experience_years",
+            "branches",
         )
 
-    def get_specialty(self, obj: Doctor) -> str:
+    branches = serializers.SerializerMethodField()
+
+    def get_branches(self, obj: Professional):
+        # We can safely use obj.branches.all() since it should be prefetch_related where possible,
+        # but to keep previews light we just map them directly. 
+        return [{"id": b.id, "title": b.title, "address": b.address, "organization_id": b.organization_id} for b in obj.branches.all()]
+
+    def get_photo_url(self, obj: Professional) -> str:
+        request = self.context.get("request")
+        if obj.photo_url:
+            raw = str(obj.photo_url)
+            if raw.startswith("/static/") or raw.startswith("static/"):
+                path = raw if raw.startswith("/") else f"/{raw}"
+                return request.build_absolute_uri(path) if request else path
+
+            url = obj.photo_url.url
+            return request.build_absolute_uri(url) if request else url
+        return ""
+
+    def get_specialty(self, obj: Professional) -> str:
         if obj.primary_specialist_id:
             return obj.primary_specialist.title
         return ""
 
-    def get_rating(self, obj: Doctor) -> float:
+    def get_rating(self, obj: Professional) -> float:
         # DecimalField в JSON может сериализоваться как строка — явно приводим к float
         return float(obj.rating or 0)
 
 
-class DoctorAvailabilitySerializer(serializers.Serializer):
+class ProfessionalAvailabilitySerializer(serializers.Serializer):
     label = serializers.CharField()
     slots = serializers.ListField(child=serializers.CharField())
     more_count = serializers.IntegerField()
 
 
-class DoctorPreviewWithAvailabilitySerializer(DoctorPreviewSerializer):
-    availability = DoctorAvailabilitySerializer()
+class ProfessionalPreviewWithAvailabilitySerializer(ProfessionalPreviewSerializer):
+    availability = ProfessionalAvailabilitySerializer()
 
-    class Meta(DoctorPreviewSerializer.Meta):
-        fields = DoctorPreviewSerializer.Meta.fields + ("availability",)
+    class Meta(ProfessionalPreviewSerializer.Meta):
+        fields = ProfessionalPreviewSerializer.Meta.fields + ("availability",)
 
 
 class PaginationSerializer(serializers.Serializer):
@@ -71,45 +146,117 @@ class SpecialistsListResponseSerializer(serializers.Serializer):
     data = SpecialistSerializer(many=True)
 
 
-class DoctorsListResponseSerializer(serializers.Serializer):
-    data = DoctorPreviewWithAvailabilitySerializer(many=True)
+class ProfessionalsListResponseSerializerLegacy(serializers.Serializer):
+    data = ProfessionalPreviewWithAvailabilitySerializer(many=True)
+    pagination = PaginationSerializer()
+
+
+class ProfessionalsListResponseSerializer(serializers.Serializer):
+    data = ProfessionalPreviewWithAvailabilitySerializer(many=True)
     pagination = PaginationSerializer()
 
 
 class ServiceSerializer(serializers.ModelSerializer):
+    """Public Service DTO.
+
+    Intentionally does NOT expose professional_id/professional_ids to keep frontend contract simple.
+    If frontend needs services for a specific professional, it should use:
+      GET /services?professional_id=<id>
+    """
+
     class Meta:
         model = Service
-        fields = ("id", "name", "price", "duration_min", "description")
+        fields = (
+            "id",
+            "name",
+            "price",
+            "duration_min",
+            "description",
+        )
+
+
+class ServicesListResponseSerializer(serializers.Serializer):
+    data = ServiceSerializer(many=True)
+    pagination = PaginationSerializer()
+
+
+class ProfessionalAvailableServicesResponseSerializer(serializers.Serializer):
+    """Services that can start at the given date+time for a professional."""
+
+    data = ServiceSerializer(many=True)
+
+
+class ProfessionalAvailableTimesResponseSerializer(serializers.Serializer):
+    """Times that can start for the given services on a selected date."""
+
+    date = serializers.DateField()
+    duration_min = serializers.IntegerField()
+    times = serializers.ListField(child=serializers.CharField())
 
 
 class ReviewSerializer(serializers.ModelSerializer):
-    patient_name = serializers.SerializerMethodField()
+    patient_name = serializers.SerializerMethodField(method_name="get_patient_name")
     date = serializers.SerializerMethodField()
+    client_avatar = serializers.SerializerMethodField(method_name="get_client_avatar")
 
     class Meta:
         model = Review
-        fields = ("id", "patient_name", "patient_avatar", "rating", "text", "date")
+        fields = (
+            "id",
+            "patient_name",
+            "client_avatar",
+            "rating",
+            "text",
+            "date",
+        )
 
     def get_patient_name(self, obj: Review) -> str:
-        if obj.patient and obj.patient.full_name:
-            return obj.patient.full_name
-        if obj.patient and obj.patient.user:
-            return obj.patient.user.username
+        if obj.client and obj.client.full_name:
+            return obj.client.full_name
+        if obj.client and obj.client.user:
+            return obj.client.user.username
         return ""
 
     def get_date(self, obj: Review) -> str:
         return obj.created_at.date().isoformat()
 
+    def get_client_avatar(self, obj: Review) -> str:
+        """Return absolute patient avatar URL.
 
-class DoctorDetailSerializer(serializers.ModelSerializer):
+        Priority:
+        1) Client.photo (ImageField)
+        2) Review.client_avatar (legacy string)
+        """
+
+        request = self.context.get("request")
+        if getattr(obj, "client", None) and getattr(obj.client, "photo", None):
+            url = obj.client.photo.url
+            return request.build_absolute_uri(url) if request else url
+
+        raw = (getattr(obj, "client_avatar", "") or "").strip()
+        if not raw:
+            return ""
+        if raw.startswith("http://") or raw.startswith("https://"):
+            return raw
+        # allow stored relative path
+        if raw.startswith("/"):
+            return request.build_absolute_uri(raw) if request else raw
+        return request.build_absolute_uri(f"/{raw}") if request else raw
+
+
+class ProfessionalDetailSerializer(serializers.ModelSerializer):
     specialties = serializers.SerializerMethodField()
+    photo_url = serializers.SerializerMethodField()
     services = ServiceSerializer(many=True)
     reviews = serializers.SerializerMethodField()
     rating = serializers.SerializerMethodField()
     languages = serializers.SerializerMethodField()
+    paylink_enabled = serializers.SerializerMethodField()
+    clinic_name = serializers.CharField(source="organization_name")
+    clinic_address = serializers.CharField(source="organization_address")
 
     class Meta:
-        model = Doctor
+        model = Professional
         fields = (
             "id",
             "full_name",
@@ -126,35 +273,67 @@ class DoctorDetailSerializer(serializers.ModelSerializer):
             "languages",
             "is_accepting_new",
             "is_active",
+            "paylink_enabled",
             "gender",
             "slot_duration_min",
             "services",
             "reviews",
+            "branches",
         )
+    
+    branches = serializers.SerializerMethodField()
 
-    def get_rating(self, obj: Doctor) -> float:
+    def get_branches(self, obj: Professional):
+        # Return basic branch info so frontend knows which organizations/branches this specialist belongs to
+        return [{"id": b.id, "title": b.title, "address": b.address, "organization_id": b.organization_id} for b in obj.branches.all()]
+
+    def get_photo_url(self, obj: Professional) -> str:
+        request = self.context.get("request")
+        if obj.photo_url:
+            raw = str(obj.photo_url)
+            if raw.startswith("/static/") or raw.startswith("static/"):
+                path = raw if raw.startswith("/") else f"/{raw}"
+                return request.build_absolute_uri(path) if request else path
+
+            url = obj.photo_url.url
+            return request.build_absolute_uri(url) if request else url
+        return ""
+
+    def get_rating(self, obj: Professional) -> float:
         return float(obj.rating or 0)
 
-    def get_languages(self, obj: Doctor):
+    def get_languages(self, obj: Professional) -> list[str]:
         # в БД храним как "ru,kg", на фронт отдаём массив
         if not obj.languages:
             return []
         return [x.strip() for x in obj.languages.split(",") if x.strip()]
 
-    def get_specialties(self, obj: Doctor):
+    def get_paylink_enabled(self, obj: Professional) -> bool:
+        feature_settings = ProjectFeatureSettings.objects.order_by("id").first()
+        global_enabled = bool(getattr(settings, "FEATURE_PAYLINK_ENABLED", True))
+        if feature_settings is not None:
+            global_enabled = global_enabled and bool(feature_settings.paylink_enabled)
+
+        org_enabled = True
+        if obj.branches.exists():
+            org_enabled = any(b.organization.paylink_enabled for b in obj.branches.select_related("organization").all() if b.organization)
+
+        return bool(global_enabled and org_enabled and bool(getattr(obj, "paylink_enabled", True)))
+
+    def get_specialties(self, obj: Professional) -> list[str]:
         return list(
-            obj.doctor_specialties.select_related("specialist")
+            obj.professional_specialties.select_related("specialist")
             .order_by("-is_primary", "specialist__sort_order")
             .values_list("specialist__title", flat=True)
         )
 
-    def get_reviews(self, obj: Doctor):
+    def get_reviews(self, obj: Professional) -> dict:
         qs = obj.reviews.filter(is_approved=True).order_by("-created_at")
         return {
             # фронт сейчас ожидает большое число (как в моках),
             # но реальные items берём из таблицы reviews.
             "total_count": max(obj.rating_count, qs.count()),
-            "items": ReviewSerializer(qs[:10], many=True).data,
+            "items": ReviewSerializer(qs[:10], many=True, context=self.context).data,
         }
 
 
@@ -202,10 +381,24 @@ class SendOtpResponseSerializer(serializers.Serializer):
 
 
 class VerifyOtpResponseSerializer(serializers.Serializer):
-    access_token = serializers.CharField()
-    refresh_token = serializers.CharField(required=False)
-    token_type = serializers.CharField()
+    """Response for patient OTP verification.
+
+    If profile already completed -> returns access_token.
+    Otherwise -> returns phone and code for step-3 completion.
+    """
+
+    needs_profile = serializers.BooleanField()
     is_new_patient = serializers.BooleanField()
+
+    # when needs_profile=false
+    access_token = serializers.CharField(required=False)
+    refresh_token = serializers.CharField(required=False)
+    token_type = serializers.CharField(required=False)
+
+    # when needs_profile=true
+    phone = serializers.CharField(required=False)
+    code = serializers.CharField(required=False)
+    message = serializers.CharField(required=False)
 
 
 class VerifyPhoneCodeResponseSerializer(serializers.Serializer):
@@ -213,20 +406,167 @@ class VerifyPhoneCodeResponseSerializer(serializers.Serializer):
     refresh_token = serializers.CharField()
 
 
-class CreateBookingSerializer(serializers.Serializer):
-    doctor_id = serializers.IntegerField()
+class CompleteClientProfileSerializer(serializers.Serializer):
+    phone = serializers.CharField(
+        max_length=20,
+        help_text=(
+            "Поддерживаемые форматы: +996XXXXXXXXX или +7XXXXXXXXXX. "
+            "Также можно отправлять без '+': 996XXXXXXXXX, 7XXXXXXXXXX, 8777..., "
+            "а для KG можно 0706... или 706... — будет нормализовано."
+        ),
+    )
+    # All fields except phone must be optional and allow sending empty values.
+    # We accept both "" and null where applicable.
+    full_name = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
+    inn = serializers.IntegerField(required=False, allow_null=True, default=None)
+    birth_date = serializers.DateField(required=False, allow_null=True, default=None)
+    # GenderInputField already returns None for ""/null.
+    gender = GenderInputField(required=False, allow_null=True)
+    nickname = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
+    telegram = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
+    instagram = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
+
+    def validate_phone(self, value: str) -> str:
+        phone = normalize_phone(value)
+        if not is_supported_phone(phone):
+            raise serializers.ValidationError("Неверный формат телефона")
+        return phone
+
+    def to_internal_value(self, data):
+        if isinstance(data, dict):
+            data = data.copy()
+            for key in ["inn", "birth_date"]:
+                if key in data and data[key] == "":
+                    data[key] = None
+        return super().to_internal_value(data)
+
+
+class CompleteClientProfileResponseSerializer(serializers.Serializer):
+    access_token = serializers.CharField()
+    token_type = serializers.CharField()
+
+
+# --- Professional cabinet (/v1/pro/*) ---
+
+
+class ProLoginSerializer(serializers.Serializer):
+    username = serializers.CharField()
+    password = serializers.CharField()
+
+
+class ProSendOtpSerializer(serializers.Serializer):
+    phone = serializers.CharField(max_length=20)
+
+
+class ProVerifyOtpSerializer(serializers.Serializer):
+    phone = serializers.CharField(max_length=20)
+    code = serializers.CharField(max_length=6)
+
+
+class ProAuthResponseSerializer(serializers.Serializer):
+    access_token = serializers.CharField()
+    token_type = serializers.CharField()
+
+
+class ProMeSerializer(serializers.Serializer):
+    professional_id = serializers.IntegerField()
+    full_name = serializers.CharField()
+    phone = serializers.CharField()
+    username = serializers.CharField()
+
+
+class ProScheduleItemSerializer(serializers.ModelSerializer):
+    start_time = serializers.TimeField(format="%H:%M", input_formats=["%H:%M"])
+    end_time = serializers.TimeField(format="%H:%M", input_formats=["%H:%M"])
+    break_start = serializers.TimeField(format="%H:%M", input_formats=["%H:%M"], required=False, allow_null=True)
+    break_end = serializers.TimeField(format="%H:%M", input_formats=["%H:%M"], required=False, allow_null=True)
+
+    class Meta:
+        model = ProfessionalSchedule
+        fields = ("id", "day_of_week", "is_working", "start_time", "end_time", "break_start", "break_end")
+
+
+class ProScheduleUpdateSerializer(serializers.Serializer):
+    items = ProScheduleItemSerializer(many=True)
+
+    def validate(self, attrs):
+        items = attrs.get("items") or []
+        days = [i.get("day_of_week") for i in items]
+        if len(days) != len(set(days)):
+            raise serializers.ValidationError({"items": ["day_of_week должен быть уникальным"]})
+        for d in days:
+            if d is None or int(d) < 0 or int(d) > 6:
+                raise serializers.ValidationError({"items": ["day_of_week должен быть 0..6"]})
+        return attrs
+
+
+class ProScheduleExceptionSerializer(serializers.ModelSerializer):
+    start_time = serializers.TimeField(format="%H:%M", required=False, allow_null=True)
+    end_time = serializers.TimeField(format="%H:%M", required=False, allow_null=True)
+    break_start = serializers.TimeField(format="%H:%M", required=False, allow_null=True)
+    break_end = serializers.TimeField(format="%H:%M", required=False, allow_null=True)
+
+    class Meta:
+        model = ScheduleException
+        fields = ("id", "date", "is_day_off", "reason", "start_time", "end_time", "break_start", "break_end")
+
+
+class ProScheduleExceptionCreateSerializer(serializers.Serializer):
     date = serializers.DateField()
-    time = serializers.TimeField()
+    is_day_off = serializers.BooleanField(default=True)
+    reason = serializers.CharField(required=False, allow_blank=True)
+    
+    start_time = serializers.TimeField(format="%H:%M", input_formats=["%H:%M"], required=False, allow_null=True)
+    end_time = serializers.TimeField(format="%H:%M", input_formats=["%H:%M"], required=False, allow_null=True)
+    break_start = serializers.TimeField(format="%H:%M", input_formats=["%H:%M"], required=False, allow_null=True)
+    break_end = serializers.TimeField(format="%H:%M", input_formats=["%H:%M"], required=False, allow_null=True)
+
+
+class ProBookingSerializer(serializers.ModelSerializer):
+    date = serializers.DateField(source="booking_date")
+    time = serializers.TimeField(source="booking_time", format="%H:%M")
+    patient_phone = serializers.CharField(source="client.phone")
+    patient_name = serializers.CharField(source="client.full_name")
+    patient_photo_url = serializers.SerializerMethodField()
+    services = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Booking
+        fields = ("id", "confirmation_code", "date", "time", "status", "total_price", "total_duration_min", "patient_phone", "patient_name", "patient_photo_url", "services")
+
+    def get_patient_photo_url(self, obj):
+        if obj.client and obj.client.photo:
+            request = self.context.get("request")
+            if request:
+                return request.build_absolute_uri(obj.client.photo.url)
+            return obj.client.photo.url
+        return ""
+
+    def get_services(self, obj):
+        return [{"id": bs.service_id, "name": bs.service.name} for bs in obj.booking_services.all()]
+
+
+class CreateBookingSerializer(serializers.Serializer):
+    professional_id = serializers.IntegerField(required=False)
+    date = serializers.DateField()
+    # accept only HH:MM to keep frontend contract simple
+    time = serializers.TimeField(format="%H:%M", input_formats=["%H:%M"])
     service_ids = serializers.ListField(
         child=serializers.IntegerField(), allow_empty=False
     )
 
+    def validate(self, attrs):
+        professional_id = attrs.get("professional_id")
+        if professional_id is None:
+            raise serializers.ValidationError({"professional_id": ["Обязательный параметр"]})
+        return attrs
 
-class BookingDoctorSerializer(serializers.Serializer):
+
+class BookingProfessionalSerializer(serializers.Serializer):
     full_name = serializers.CharField()
     photo_url = serializers.CharField()
     specialty = serializers.CharField()
-    clinic_address = serializers.CharField()
+    clinic_address = serializers.CharField(source="organization_address")
 
 
 class BookingServiceShortSerializer(serializers.Serializer):
@@ -237,7 +577,7 @@ class BookingServiceShortSerializer(serializers.Serializer):
 class BookingCreateDataSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     confirmation_code = serializers.CharField()
-    doctor = BookingDoctorSerializer()
+    professional = BookingProfessionalSerializer()
     date = serializers.DateField()
     time = serializers.CharField()
     services = BookingServiceShortSerializer(many=True)
@@ -261,7 +601,7 @@ class CalendarDaySerializer(serializers.Serializer):
     times = serializers.ListField(child=serializers.CharField())
 
 
-class DoctorCalendarResponseSerializer(serializers.Serializer):
+class ProfessionalCalendarResponseSerializer(serializers.Serializer):
     data = CalendarDaySerializer(many=True)
 
 
@@ -276,8 +616,9 @@ class CreateReviewSerializer(serializers.Serializer):
     text = serializers.CharField(allow_blank=True, required=False)
 
 
+
 class BookingItemSerializer(serializers.ModelSerializer):
-    doctor_name = serializers.CharField(source="doctor.full_name")
+    professional_name = serializers.CharField(source="professional.full_name")
     date = serializers.DateField(source="booking_date")
     time = serializers.TimeField(source="booking_time", format="%H:%M")
 
@@ -286,7 +627,7 @@ class BookingItemSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "confirmation_code",
-            "doctor_name",
+            "professional_name",
             "date",
             "time",
             "status",
@@ -294,5 +635,67 @@ class BookingItemSerializer(serializers.ModelSerializer):
         )
 
 
+class ProfessionalDetailResponseSerializer(serializers.Serializer):
+    data = ProfessionalDetailSerializer()
+
+
 class MyBookingsResponseSerializer(serializers.Serializer):
     data = BookingItemSerializer(many=True)
+
+
+class OrganizationSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    logo_url = serializers.CharField(required=False)
+    paylink_enabled = serializers.BooleanField(required=False)
+    specialists_count = serializers.IntegerField()
+    professionals_count = serializers.IntegerField()
+    services_count = serializers.IntegerField(required=False)
+    branches = serializers.ListField(child=serializers.DictField(), required=False)
+
+
+class BranchSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    organization_id = serializers.IntegerField()
+    organization_name = serializers.CharField()
+    title = serializers.CharField()
+    address = serializers.CharField()
+    professionals_count = serializers.IntegerField()
+
+
+class BranchScheduleItemSerializer(serializers.Serializer):
+    day_of_week = serializers.IntegerField()
+    is_working = serializers.BooleanField()
+    start_time = serializers.TimeField(format="%H:%M", input_formats=["%H:%M"], required=False, allow_null=True)
+    end_time = serializers.TimeField(format="%H:%M", input_formats=["%H:%M"], required=False, allow_null=True)
+    break_start = serializers.TimeField(format="%H:%M", input_formats=["%H:%M"], required=False, allow_null=True)
+    break_end = serializers.TimeField(format="%H:%M", input_formats=["%H:%M"], required=False, allow_null=True)
+
+
+class BranchDetailSerializer(BranchSerializer):
+    schedule = BranchScheduleItemSerializer(many=True)
+
+
+class BranchDetailResponseSerializer(serializers.Serializer):
+    data = BranchDetailSerializer()
+
+
+class FeatureFlagsSerializer(serializers.Serializer):
+    branches_enabled = serializers.BooleanField()
+    paylink_enabled = serializers.BooleanField()
+
+    # paylink_scopes
+    paylink_by_organization = serializers.BooleanField(required=False)
+    paylink_by_professional = serializers.BooleanField(required=False)
+
+
+class OrganizationsListResponseSerializer(serializers.Serializer):
+    data = OrganizationSerializer(many=True)
+
+
+class OrganizationDetailResponseSerializer(serializers.Serializer):
+    data = OrganizationSerializer()
+
+
+class BranchesListResponseSerializer(serializers.Serializer):
+    data = BranchSerializer(many=True)

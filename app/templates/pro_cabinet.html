@@ -1,0 +1,1054 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Личный кабинет специалиста | MamaDoc</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Vue 3 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <style>
+        :root {
+            --primary: #22c55e;
+            --primary-dark: #16a34a;
+            --primary-light: #dcfce7;
+            --bg-color: #f3f4f6;
+            --surface: #ffffff;
+            --text-main: #1f2937;
+            --text-muted: #6b7280;
+            --border: #e5e7eb;
+            --danger: #ef4444;
+            --radius: 12px;
+            --shadow: 0 10px 25px rgba(0,0,0,0.05);
+            --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            min-height: 100vh;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Utilities */
+        .flex { display: flex; }
+        .flex-col { flex-direction: column; }
+        .items-center { align-items: center; }
+        .justify-center { justify-content: center; }
+        .justify-between { justify-content: space-between; }
+        .gap-4 { gap: 1rem; }
+        .gap-2 { gap: 0.5rem; }
+        .text-center { text-align: center; }
+        .w-full { width: 100%; }
+        .mt-4 { margin-top: 1rem; }
+        .mb-4 { margin-bottom: 1rem; }
+        .mb-6 { margin-bottom: 1.5rem; }
+        .font-semibold { font-weight: 600; }
+        .text-muted { color: var(--text-muted); }
+        .cursor-pointer { cursor: pointer; }
+
+        /* Auth Screen */
+        .auth-container {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #f0fdf4 0%, #e0f2fe 100%);
+            padding: 20px;
+        }
+
+        .auth-card {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(12px);
+            padding: 2.5rem;
+            border-radius: 24px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.08);
+            width: 100%;
+            max-width: 400px;
+            border: 1px solid rgba(255,255,255,0.4);
+            animation: slideUp 0.5s ease-out;
+        }
+
+        .auth-logo {
+            width: 60px;
+            height: 60px;
+            background: var(--primary);
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 28px;
+            font-weight: 700;
+            margin: 0 auto 1.5rem;
+            box-shadow: 0 10px 20px rgba(34, 197, 94, 0.3);
+        }
+
+        h1 {
+            font-size: 1.75rem;
+            font-weight: 700;
+            color: var(--text-main);
+            margin-bottom: 0.5rem;
+        }
+
+        /* Inputs & Buttons */
+        .form-group {
+            margin-bottom: 1.25rem;
+            text-align: left;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 0.875rem;
+            font-weight: 500;
+            margin-bottom: 0.5rem;
+            color: var(--text-main);
+        }
+
+        .input, .select {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            font-size: 1rem;
+            transition: var(--transition);
+            background: white;
+        }
+
+        .input:focus, .select:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px var(--primary-light);
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0.75rem 1.5rem;
+            border-radius: var(--radius);
+            font-weight: 600;
+            font-size: 1rem;
+            border: none;
+            cursor: pointer;
+            transition: var(--transition);
+            width: 100%;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+            box-shadow: 0 4px 12px rgba(34, 197, 94, 0.25);
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 16px rgba(34, 197, 94, 0.35);
+        }
+
+        .btn-primary:active {
+            transform: translateY(0);
+        }
+
+        .btn-outline {
+            background: transparent;
+            color: var(--primary);
+            border: 1px solid var(--primary);
+        }
+        
+        .btn-outline:hover {
+            background: var(--primary-light);
+        }
+        
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+        .btn-danger:hover {
+            background: #b91c1c;
+        }
+
+        .btn-sm {
+            padding: 0.5rem 1rem;
+            font-size: 0.875rem;
+            width: auto;
+        }
+
+        /* Layout */
+        .layout {
+            display: flex;
+            min-height: 100vh;
+        }
+
+        .sidebar {
+            width: 260px;
+            background: var(--surface);
+            border-right: 1px solid var(--border);
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            position: fixed;
+            height: 100vh;
+            z-index: 10;
+        }
+
+        .main-content {
+            flex: 1;
+            margin-left: 260px;
+            padding: 2rem 3rem;
+            max-width: 1400px;
+        }
+
+        .nav-item {
+            padding: 0.875rem 1rem;
+            border-radius: var(--radius);
+            color: var(--text-muted);
+            font-weight: 500;
+            cursor: pointer;
+            transition: var(--transition);
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .nav-item:hover {
+            background: var(--bg-color);
+            color: var(--text-main);
+        }
+
+        .nav-item.active {
+            background: var(--primary-light);
+            color: var(--primary-dark);
+        }
+
+        .topbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        /* Cards & Grid */
+        .card {
+            background: var(--surface);
+            border-radius: var(--radius);
+            padding: 1.5rem;
+            box-shadow: var(--shadow);
+            border: 1px solid rgba(0,0,0,0.02);
+            transition: var(--transition);
+        }
+
+        .split-view {
+            display: grid;
+            grid-template-columns: 1fr 400px;
+            gap: 1.5rem;
+            align-items: start;
+        }
+
+        /* Calendar Component */
+        .calendar-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+        .calendar-grid {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 8px;
+        }
+        .calendar-day-header {
+            text-align: center;
+            font-weight: 600;
+            color: var(--text-muted);
+            padding-bottom: 0.5rem;
+            font-size: 0.875rem;
+        }
+        .calendar-cell {
+            aspect-ratio: 1;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 0.5rem;
+            display: flex;
+            flex-direction: column;
+            background: white;
+            transition: var(--transition);
+            position: relative;
+        }
+        .calendar-cell.empty {
+            background: transparent;
+            border-color: transparent;
+        }
+        .calendar-cell:not(.empty):hover {
+            border-color: var(--primary);
+            box-shadow: 0 4px 12px rgba(34,197,94,0.1);
+        }
+        .calendar-cell.selected {
+            border-color: var(--primary);
+            background: var(--primary-light);
+            box-shadow: 0 0 0 2px var(--primary);
+        }
+        .calendar-cell.today .date-num {
+            background: var(--primary);
+            color: white;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .date-num {
+            font-weight: 600;
+            font-size: 0.9rem;
+            margin-bottom: auto;
+        }
+        .cell-content {
+            margin-top: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .badge {
+            font-size: 0.7rem;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: 600;
+            text-align: center;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .badge-bookings { 
+            background: var(--primary); 
+            color: white; 
+            padding: 4px 8px; 
+            font-size: 0.75rem; 
+            border-radius: 6px; 
+            box-shadow: 0 2px 4px rgba(34,197,94,0.3); 
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+        }
+        .badge-off { background: #fee2e2; color: #dc2626; }
+        .badge-changed { background: #fef3c7; color: #d97706; }
+        
+        .calendar-cell.has-bookings {
+            background-color: #ecfdf5;
+            border: 2px solid var(--primary-light);
+            box-shadow: inset 0 0 10px rgba(34, 197, 94, 0.05);
+        }
+        .calendar-cell.has-bookings:hover {
+            background-color: #d1fae5;
+        }
+        
+        .patient-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid var(--primary-light);
+        }
+        .patient-avatar-placeholder {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background-color: var(--primary-light);
+            color: var(--primary-dark);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 1.1rem;
+        }
+
+        /* Booking List */
+        .booking-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            margin-bottom: 1rem;
+            transition: var(--transition);
+            background: #fff;
+        }
+        .booking-item:hover {
+            border-color: var(--primary-light);
+            transform: translateX(4px);
+        }
+        .status-badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 99px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .status-confirmed { background: var(--primary-light); color: var(--primary-dark); }
+        .status-cancelled { background: #fee2e2; color: #dc2626; }
+        .status-pending { background: #fef3c7; color: #d97706; }
+
+        /* Alerts */
+        .alert {
+            padding: 1rem;
+            border-radius: var(--radius);
+            margin-bottom: 1.5rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+        .alert-error { background: #fee2e2; color: #dc2626; border: 1px solid #fca5a5; }
+        .alert-success { background: var(--primary-light); color: var(--primary-dark); border: 1px solid #86efac; }
+
+        /* Empty state */
+        .empty-state { text-align: center; padding: 2rem 1rem; color: var(--text-muted); }
+        .empty-icon { font-size: 2.5rem; margin-bottom: 0.5rem; opacity: 0.5; }
+
+        .filters { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+    </style>
+</head>
+<body>
+    {% verbatim %}
+    <div id="app">
+        <!-- Login Screen -->
+        <transition name="fade">
+            <div v-if="!isAuthenticated" class="auth-container">
+                <div class="auth-card">
+                    <div class="auth-logo">M</div>
+                    <div class="text-center mb-6">
+                        <h1>Кабинет специалиста</h1>
+                        <p class="text-muted">Войдите в систему для управления записями</p>
+                    </div>
+
+                    <div v-if="authError" class="alert alert-error">{{ authError }}</div>
+
+                    <div class="flex gap-2 mb-6">
+                        <button class="btn btn-outline btn-sm" style="flex:1" :class="{ 'btn-primary': authMode==='password' }" @click="authMode='password'">Логин + пароль</button>
+                        <button class="btn btn-outline btn-sm" style="flex:1" :class="{ 'btn-primary': authMode==='otp' }" @click="authMode='otp'">Телефон + код</button>
+                    </div>
+
+                    <!-- Password login -->
+                    <form v-if="authMode==='password'" @submit.prevent="login">
+                        <div class="form-group">
+                            <label class="form-label">Логин (username или телефон)</label>
+                            <input type="text" v-model="loginData.username" class="input" placeholder="Введите логин" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Пароль</label>
+                            <input type="password" v-model="loginData.password" class="input" placeholder="Введите пароль" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary" :disabled="isLoading">
+                            {{ isLoading ? 'Вход...' : 'Войти' }}
+                        </button>
+                    </form>
+
+                    <!-- OTP login -->
+                    <form v-else @submit.prevent="otpStep===1 ? sendOtp() : verifyOtp()">
+                        <div class="form-group">
+                            <label class="form-label">Телефон</label>
+                            <input type="text" v-model="otpData.phone" class="input" placeholder="+996700000000" required>
+                        </div>
+                        <div class="form-group" v-if="otpStep===2">
+                            <label class="form-label">Код из SMS</label>
+                            <input type="text" v-model="otpData.code" class="input" placeholder="123456" required>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary" :disabled="isLoading">
+                            {{ isLoading ? '...' : (otpStep===1 ? 'Отправить код' : 'Подтвердить') }}
+                        </button>
+
+                        <button v-if="otpStep===2" type="button" class="btn btn-outline mt-4" @click="otpStep=1; otpData.code=''" :disabled="isLoading">
+                            Назад
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </transition>
+
+        <!-- Main Dashboard -->
+        <transition name="fade">
+            <div v-if="isAuthenticated" class="layout">
+                <!-- Sidebar -->
+                <aside class="sidebar">
+                    <div class="flex items-center gap-2 mb-6" style="padding-bottom: 1rem; border-bottom: 1px solid var(--border)">
+                        <div class="auth-logo" style="width: 40px; height: 40px; font-size: 20px; margin: 0; box-shadow: none">M</div>
+                        <span class="font-bold text-lg">MamaDoc Pro</span>
+                    </div>
+
+                    <div class="nav-item" :class="{ active: currentTab === 'bookings' }" @click="currentTab = 'bookings'">
+                        📅 Календарь записей
+                    </div>
+                    <div class="nav-item" :class="{ active: currentTab === 'schedule' }" @click="currentTab = 'schedule'">
+                        ⏱ График работы (исключения)
+                    </div>
+                    <div class="nav-item" :class="{ active: currentTab === 'template' }" @click="currentTab = 'template'">
+                        ⚙️ Шаблон недели
+                    </div>
+
+                    <div style="margin-top: auto;">
+                        <div class="text-sm text-muted mb-2 px-2">{{ profile?.full_name }}</div>
+                        <button class="nav-item w-full" style="color: var(--danger); justify-content: flex-start" @click="logout">
+                            🚪 Выйти
+                        </button>
+                    </div>
+                </aside>
+
+                <!-- Content -->
+                <main class="main-content">
+                    <div class="topbar">
+                        <h2>
+                            <template v-if="currentTab === 'bookings'">Календарь записей</template>
+                            <template v-else-if="currentTab === 'schedule'">График работы на конкретные дни</template>
+                            <template v-else>Шаблон на неделю по умолчанию</template>
+                        </h2>
+                        <div class="text-muted">{{ new Date().toLocaleDateString('ru-RU', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) }}</div>
+                    </div>
+
+                    <div v-if="successMsg" class="alert alert-success">{{ successMsg }}</div>
+                    <div v-if="errorMsg" class="alert alert-error">{{ errorMsg }}</div>
+
+                    <!-- Bookings Tab -->
+                    <div v-if="currentTab === 'bookings'" class="split-view">
+                        <!-- Left: Calendar -->
+                        <div class="card">
+                            <div class="calendar-header">
+                                <button class="btn btn-outline btn-sm" @click="prevMonthB">&larr;</button>
+                                <h3 class="font-bold">{{ monthNameB }} {{ yearB }}</h3>
+                                <button class="btn btn-outline btn-sm" @click="nextMonthB">&rarr;</button>
+                            </div>
+                            <div class="calendar-grid">
+                                <div class="calendar-day-header" v-for="d in ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']">{{ d }}</div>
+                                <div class="calendar-cell empty" v-for="blank in blanksB"></div>
+                                <div class="calendar-cell cursor-pointer" 
+                                     v-for="day in daysInMonthB" 
+                                     :key="day"
+                                     :class="{ 'today': isToday(yearB, monthB, day), 'selected': isSelectedB(day), 'has-bookings': bookingsByDate[fmtDate(yearB, monthB, day)]?.length }"
+                                     @click="selectDateB(day)">
+                                     <div class="date-num">{{ day }}</div>
+                                     <div class="cell-content">
+                                         <div v-if="bookingsByDate[fmtDate(yearB, monthB, day)]?.length" class="badge badge-bookings">
+                                             {{ bookingsByDate[fmtDate(yearB, monthB, day)].length }} зап.
+                                         </div>
+                                     </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Right: Details & Filters -->
+                        <div class="card" style="position: sticky; top: 2rem;">
+                            <h3 class="mb-4">Записи: {{ selectedDateBFormatted }}</h3>
+                            
+                            <div class="filters">
+                                <select v-model="bookingFilter" class="select" style="padding: 0.5rem; font-size: 0.875rem;">
+                                    <option value="all">Все записи</option>
+                                    <option value="confirmed">Только подтвержденные</option>
+                                    <option value="completed">Завершенные</option>
+                                    <option value="cancelled">Отмененные</option>
+                                </select>
+                                <button class="btn btn-outline btn-sm" @click="fetchBookings" title="Обновить">🔄</button>
+                            </div>
+
+                            <div v-if="filteredBookings.length === 0" class="empty-state">
+                                <div class="empty-icon">📅</div>
+                                <p>Нет записей на этот день</p>
+                            </div>
+
+                            <div v-else style="max-height: 60vh; overflow-y: auto; padding-right: 0.5rem;">
+                                <div v-for="b in filteredBookings" :key="b.id" class="booking-item" style="flex-direction: column; align-items: stretch; gap: 0.5rem;">
+                                    <div class="flex justify-between items-center">
+                                        <span class="status-badge" :class="'status-' + b.status">
+                                            {{ b.status === 'confirmed' ? 'Подтверждена' : (b.status === 'cancelled' ? 'Отменена' : (b.status === 'completed' ? 'Завершена' : b.status)) }}
+                                        </span>
+                                        <b style="font-size: 1.1rem; color: var(--primary-dark)">{{ b.time }}</b>
+                                    </div>
+                                    <div class="flex items-center gap-3">
+                                        <img v-if="b.patient_photo_url" :src="b.patient_photo_url" class="patient-avatar" alt="Avatar">
+                                        <div v-else class="patient-avatar-placeholder">
+                                            {{ b.patient_name ? b.patient_name.charAt(0).toUpperCase() : '?' }}
+                                        </div>
+                                        <div>
+                                            <h4 class="font-semibold">{{ b.patient_name }}</h4>
+                                            <p class="text-sm text-muted">{{ b.patient_phone }}</p>
+                                        </div>
+                                    </div>
+                                    <div class="text-sm mt-2" style="background: var(--bg-color); padding: 0.5rem; border-radius: 8px;">
+                                        Длительность: {{ b.total_duration_min }} мин <br>
+                                        Услуги: {{ b.services.map(s => s.name).join(', ') }} <br>
+                                        <b>Итого: {{ b.total_price }} сом</b>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Schedule Exceptions Tab -->
+                    <div v-if="currentTab === 'schedule'" class="split-view">
+                        <!-- Left: Calendar -->
+                        <div class="card">
+                            <div class="calendar-header">
+                                <button class="btn btn-outline btn-sm" @click="prevMonthS">&larr;</button>
+                                <h3 class="font-bold">{{ monthNameS }} {{ yearS }}</h3>
+                                <button class="btn btn-outline btn-sm" @click="nextMonthS">&rarr;</button>
+                            </div>
+                            <div class="calendar-grid">
+                                <div class="calendar-day-header" v-for="d in ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']">{{ d }}</div>
+                                <div class="calendar-cell empty" v-for="blank in blanksS"></div>
+                                <div class="calendar-cell cursor-pointer" 
+                                     v-for="day in daysInMonthS" 
+                                     :key="day"
+                                     :class="{ 'today': isToday(yearS, monthS, day), 'selected': isSelectedS(day) }"
+                                     @click="selectDateS(day)">
+                                     <div class="date-num">{{ day }}</div>
+                                     <div class="cell-content">
+                                         <template v-if="excByDate[fmtDate(yearS, monthS, day)]">
+                                             <div v-if="excByDate[fmtDate(yearS, monthS, day)].is_day_off" class="badge badge-off">Выходной</div>
+                                             <div v-else class="badge badge-changed">Изменено</div>
+                                         </template>
+                                     </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Right: Editor -->
+                        <div class="card" style="position: sticky; top: 2rem;">
+                            <h3 class="mb-4">График на: {{ selectedDateSFormatted }}</h3>
+                            
+                            <form @submit.prevent="saveException">
+                                <div class="form-group flex items-center gap-2">
+                                    <input type="checkbox" v-model="excForm.is_day_off" id="is_day_off">
+                                    <label for="is_day_off" class="font-semibold cursor-pointer" style="margin: 0; color: var(--danger)">Сделать выходным днем</label>
+                                </div>
+
+                                <div v-if="!excForm.is_day_off">
+                                    <div class="form-group flex gap-2">
+                                        <div class="w-full">
+                                            <label class="form-label">Начало работы</label>
+                                            <input type="time" v-model="excForm.start_time" class="input" required>
+                                        </div>
+                                        <div class="w-full">
+                                            <label class="form-label">Конец работы</label>
+                                            <input type="time" v-model="excForm.end_time" class="input" required>
+                                        </div>
+                                    </div>
+                                    
+                                    <label class="form-label font-semibold mt-4">Перерыв (необязательно)</label>
+                                    <div class="form-group flex gap-2">
+                                        <div class="w-full">
+                                            <label class="form-label">Начало</label>
+                                            <input type="time" v-model="excForm.break_start" class="input">
+                                        </div>
+                                        <div class="w-full">
+                                            <label class="form-label">Конец</label>
+                                            <input type="time" v-model="excForm.break_end" class="input">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="flex gap-2 mt-6">
+                                    <button type="submit" class="btn btn-primary" :disabled="isLoading">
+                                        {{ isLoading ? 'Сохранение...' : 'Сохранить изменения' }}
+                                    </button>
+                                    <button type="button" class="btn btn-danger" v-if="currentExcId" @click="deleteException" :disabled="isLoading">
+                                        Сбросить
+                                    </button>
+                                </div>
+                                <p class="text-sm text-muted mt-4">Нажмите "Сбросить", чтобы удалить исключение и вернуться к стандартному шаблону недели для этого дня.</p>
+                            </form>
+                        </div>
+                    </div>
+
+                    <!-- Template Tab -->
+                    <div v-if="currentTab === 'template'" class="card" style="max-width: 800px">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3>Шаблон рабочей недели</h3>
+                            <button class="btn btn-primary btn-sm" @click="saveTemplate" :disabled="isLoading">
+                                {{ isLoading ? 'Сохранение...' : '💾 Сохранить шаблон' }}
+                            </button>
+                        </div>
+                        <p class="text-sm text-muted mb-4">Этот график по умолчанию применяется ко всем неделям. Вы можете переопределить конкретные даты во вкладке "График работы".</p>
+
+                        <div v-if="scheduleTemplate.length === 0" class="text-center p-4">Загрузка...</div>
+                        
+                        <div v-else>
+                            <div v-for="day in scheduleTemplate" :key="day.day_of_week" class="flex items-center gap-4 py-3" style="border-bottom: 1px solid var(--border)">
+                                <div style="width: 140px; font-weight: 500;">
+                                    <label class="flex items-center gap-2 cursor-pointer">
+                                        <input type="checkbox" v-model="day.is_working">
+                                        {{ getDayName(day.day_of_week) }}
+                                    </label>
+                                </div>
+                                
+                                <template v-if="day.is_working">
+                                    <div class="flex items-center gap-2">
+                                        <input type="time" v-model="day.start_time" class="input" style="padding: 0.25rem 0.5rem; width: auto">
+                                        <span class="text-muted">—</span>
+                                        <input type="time" v-model="day.end_time" class="input" style="padding: 0.25rem 0.5rem; width: auto">
+                                    </div>
+                                    
+                                    <div class="flex items-center gap-2 ml-4">
+                                        <span class="text-sm text-muted">Перерыв:</span>
+                                        <input type="time" v-model="day.break_start" class="input" style="padding: 0.25rem 0.5rem; width: auto">
+                                        <span class="text-muted">—</span>
+                                        <input type="time" v-model="day.break_end" class="input" style="padding: 0.25rem 0.5rem; width: auto">
+                                    </div>
+                                </template>
+                                <template v-else>
+                                    <div class="text-muted text-sm italic">Выходной</div>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+                </main>
+            </div>
+        </transition>
+    </div>
+
+    <script>
+        const { createApp, ref, reactive, computed, onMounted, watch } = Vue;
+
+        const API_BASE = '/api/v1/pro';
+
+        createApp({
+            setup() {
+                const isAuthenticated = ref(false);
+                const isLoading = ref(false);
+                const authError = ref('');
+                const successMsg = ref('');
+                const errorMsg = ref('');
+                
+                const currentTab = ref('bookings');
+                const profile = ref(null);
+
+                // --- Auth ---
+                const authMode = ref('password');
+
+                const loginData = reactive({ username: '', password: '' });
+                const otpStep = ref(1);
+                const otpData = reactive({ phone: '', code: '' });
+                const getToken = () => localStorage.getItem('pro_token');
+                const setToken = (t) => localStorage.setItem('pro_token', t);
+                const removeToken = () => localStorage.removeItem('pro_token');
+                const getHeaders = () => ({
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${getToken()}`
+                });
+
+                const showSuccess = (msg) => { successMsg.value = msg; setTimeout(() => successMsg.value = '', 3000); };
+                const showError = (msg) => { errorMsg.value = msg; setTimeout(() => errorMsg.value = '', 5000); };
+
+                const login = async () => {
+                    try {
+                        isLoading.value = true;
+                        authError.value = '';
+                        const res = await fetch(`${API_BASE}/auth/login/`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(loginData)
+                        });
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.message || 'Ошибка входа');
+                        setToken(data.access_token);
+                        isAuthenticated.value = true;
+                        await initDashboard();
+                    } catch (e) { authError.value = e.message; } 
+                    finally { isLoading.value = false; }
+                };
+
+                const sendOtp = async () => {
+                    try {
+                        isLoading.value = true;
+                        authError.value = '';
+                        const res = await fetch(`${API_BASE}/auth/send-otp/`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ phone: otpData.phone })
+                        });
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.message || 'Ошибка отправки кода');
+                        otpStep.value = 2;
+                        if (data.dev_code) {
+                            // DEV подсказка
+                            otpData.code = data.dev_code;
+                        }
+                    } catch (e) { authError.value = e.message; }
+                    finally { isLoading.value = false; }
+                };
+
+                const verifyOtp = async () => {
+                    try {
+                        isLoading.value = true;
+                        authError.value = '';
+                        const res = await fetch(`${API_BASE}/auth/verify-otp/`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ phone: otpData.phone, code: otpData.code })
+                        });
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.message || 'Ошибка проверки кода');
+                        setToken(data.access_token);
+                        isAuthenticated.value = true;
+                        await initDashboard();
+                    } catch (e) { authError.value = e.message; }
+                    finally { isLoading.value = false; }
+                };
+
+                const logout = () => { removeToken(); isAuthenticated.value = false; profile.value = null; };
+
+                const fetchProfile = async () => {
+                    const res = await fetch(`${API_BASE}/me/`, { headers: getHeaders() });
+                    if (res.status === 401 || res.status === 403) throw new Error('Auth failed');
+                    profile.value = await res.json();
+                };
+
+                // --- Calendar Helpers ---
+                const getDaysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();
+                const getFirstDayOfMonth = (year, month) => {
+                    let day = new Date(year, month, 1).getDay();
+                    return day === 0 ? 6 : day - 1; // 0=Mon, 6=Sun
+                };
+                const fmtDate = (y, m, d) => `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+                const getMonthName = (m) => ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'][m];
+
+                const todayDate = new Date();
+
+                // --- Bookings Tab State ---
+                const dateB = ref(new Date());
+                const yearB = computed(() => dateB.value.getFullYear());
+                const monthB = computed(() => dateB.value.getMonth());
+                const monthNameB = computed(() => getMonthName(monthB.value));
+                const daysInMonthB = computed(() => getDaysInMonth(yearB.value, monthB.value));
+                const blanksB = computed(() => getFirstDayOfMonth(yearB.value, monthB.value));
+                
+                const selectedDateB = ref(fmtDate(todayDate.getFullYear(), todayDate.getMonth(), todayDate.getDate()));
+                const selectedDateBFormatted = computed(() => new Date(selectedDateB.value).toLocaleDateString('ru-RU', {day:'numeric', month:'long', year:'numeric'}));
+                const allBookings = ref([]);
+                const bookingFilter = ref('all');
+
+                const prevMonthB = () => { dateB.value = new Date(yearB.value, monthB.value - 1, 1); fetchBookings(); };
+                const nextMonthB = () => { dateB.value = new Date(yearB.value, monthB.value + 1, 1); fetchBookings(); };
+                const selectDateB = (day) => { selectedDateB.value = fmtDate(yearB.value, monthB.value, day); };
+                const isSelectedB = (day) => selectedDateB.value === fmtDate(yearB.value, monthB.value, day);
+                const isToday = (y, m, d) => y === todayDate.getFullYear() && m === todayDate.getMonth() && d === todayDate.getDate();
+
+                const fetchBookings = async () => {
+                    // Fetch for a slightly larger range (current month)
+                    const y = yearB.value; const m = monthB.value;
+                    const from = fmtDate(y, m, 1);
+                    const to = fmtDate(y, m, getDaysInMonth(y, m));
+                    const res = await fetch(`${API_BASE}/me/bookings/?from=${from}&to=${to}`, { headers: getHeaders() });
+                    const result = await res.json();
+                    allBookings.value = result.data || [];
+                };
+
+                const bookingsByDate = computed(() => {
+                    const map = {};
+                    allBookings.value.forEach(b => {
+                        if (!map[b.date]) map[b.date] = [];
+                        map[b.date].push(b);
+                    });
+                    return map;
+                });
+
+                const filteredBookings = computed(() => {
+                    let list = bookingsByDate.value[selectedDateB.value] || [];
+                    if (bookingFilter.value !== 'all') {
+                        list = list.filter(b => b.status === bookingFilter.value);
+                    }
+                    return list;
+                });
+
+                // --- Schedule Exceptions Tab State ---
+                const dateS = ref(new Date());
+                const yearS = computed(() => dateS.value.getFullYear());
+                const monthS = computed(() => dateS.value.getMonth());
+                const monthNameS = computed(() => getMonthName(monthS.value));
+                const daysInMonthS = computed(() => getDaysInMonth(yearS.value, monthS.value));
+                const blanksS = computed(() => getFirstDayOfMonth(yearS.value, monthS.value));
+                
+                const selectedDateS = ref(fmtDate(todayDate.getFullYear(), todayDate.getMonth(), todayDate.getDate()));
+                const selectedDateSFormatted = computed(() => new Date(selectedDateS.value).toLocaleDateString('ru-RU', {day:'numeric', month:'long', year:'numeric'}));
+                const allExceptions = ref([]);
+                
+                const excForm = reactive({ date: '', is_day_off: false, start_time: '09:00', end_time: '18:00', break_start: '', break_end: '' });
+                const currentExcId = ref(null);
+
+                const prevMonthS = () => { dateS.value = new Date(yearS.value, monthS.value - 1, 1); };
+                const nextMonthS = () => { dateS.value = new Date(yearS.value, monthS.value + 1, 1); };
+                const isSelectedS = (day) => selectedDateS.value === fmtDate(yearS.value, monthS.value, day);
+                
+                const selectDateS = (day) => { 
+                    selectedDateS.value = fmtDate(yearS.value, monthS.value, day);
+                    populateExcForm();
+                };
+
+                const fetchExceptions = async () => {
+                    const res = await fetch(`${API_BASE}/me/schedule-exceptions/`, { headers: getHeaders() });
+                    const result = await res.json();
+                    allExceptions.value = result.data || [];
+                    populateExcForm();
+                };
+
+                const excByDate = computed(() => {
+                    const map = {};
+                    allExceptions.value.forEach(e => { map[e.date] = e; });
+                    return map;
+                });
+
+                const populateExcForm = () => {
+                    const date = selectedDateS.value;
+                    const exc = excByDate.value[date];
+                    excForm.date = date;
+                    if (exc) {
+                        currentExcId.value = exc.id;
+                        excForm.is_day_off = exc.is_day_off;
+                        excForm.start_time = exc.start_time ? exc.start_time.substring(0,5) : '09:00';
+                        excForm.end_time = exc.end_time ? exc.end_time.substring(0,5) : '18:00';
+                        excForm.break_start = exc.break_start ? exc.break_start.substring(0,5) : '';
+                        excForm.break_end = exc.break_end ? exc.break_end.substring(0,5) : '';
+                    } else {
+                        currentExcId.value = null;
+                        excForm.is_day_off = false;
+                        excForm.start_time = '09:00';
+                        excForm.end_time = '18:00';
+                        excForm.break_start = '';
+                        excForm.break_end = '';
+                    }
+                };
+
+                const saveException = async () => {
+                    try {
+                        isLoading.value = true;
+                        const payload = { ...excForm };
+                        if (payload.is_day_off) {
+                            payload.start_time = null; payload.end_time = null;
+                            payload.break_start = null; payload.break_end = null;
+                        } else {
+                            if (!payload.break_start) payload.break_start = null;
+                            if (!payload.break_end) payload.break_end = null;
+                        }
+
+                        // Post directly to add exception (if it exists, we could delete it first or backend handles it? 
+                        // Wait, POST adds a new exception. Let's delete the old one first if it exists.
+                        if (currentExcId.value) {
+                            await fetch(`${API_BASE}/me/schedule-exceptions/${currentExcId.value}/`, { method: 'DELETE', headers: getHeaders() });
+                        }
+                        
+                        const res = await fetch(`${API_BASE}/me/schedule-exceptions/`, {
+                            method: 'POST',
+                            headers: getHeaders(),
+                            body: JSON.stringify(payload)
+                        });
+                        if (!res.ok) throw new Error('Ошибка сохранения');
+                        showSuccess('График на день сохранен!');
+                        await fetchExceptions();
+                    } catch (e) { showError(e.message); }
+                    finally { isLoading.value = false; }
+                };
+
+                const deleteException = async () => {
+                    if (!currentExcId.value) return;
+                    try {
+                        isLoading.value = true;
+                        await fetch(`${API_BASE}/me/schedule-exceptions/${currentExcId.value}/`, { method: 'DELETE', headers: getHeaders() });
+                        showSuccess('Сброшено на стандартный шаблон');
+                        await fetchExceptions();
+                    } catch (e) { showError('Ошибка сброса'); }
+                    finally { isLoading.value = false; }
+                };
+
+                // --- Template Tab State ---
+                const scheduleTemplate = ref([]);
+                const fetchTemplate = async () => {
+                    const res = await fetch(`${API_BASE}/me/schedule/`, { headers: getHeaders() });
+                    const result = await res.json();
+                    let items = result.data || [];
+                    if (items.length === 0) {
+                        for (let i = 0; i < 7; i++) items.push({ day_of_week: i, is_working: i < 5, start_time: '09:00', end_time: '18:00', break_start: '', break_end: '' });
+                    } else {
+                        // format times for input
+                        items = items.map(d => ({
+                            ...d,
+                            start_time: d.start_time ? d.start_time.substring(0,5) : '',
+                            end_time: d.end_time ? d.end_time.substring(0,5) : '',
+                            break_start: d.break_start ? d.break_start.substring(0,5) : '',
+                            break_end: d.break_end ? d.break_end.substring(0,5) : ''
+                        }));
+                    }
+                    scheduleTemplate.value = items.sort((a,b) => a.day_of_week - b.day_of_week);
+                };
+
+                const saveTemplate = async () => {
+                    try {
+                        isLoading.value = true;
+                        const payload = scheduleTemplate.value.map(d => ({
+                            ...d, break_start: d.break_start || null, break_end: d.break_end || null
+                        }));
+                        const res = await fetch(`${API_BASE}/me/schedule/`, {
+                            method: 'PUT',
+                            headers: getHeaders(),
+                            body: JSON.stringify({ items: payload })
+                        });
+                        if (!res.ok) throw new Error('Ошибка сохранения');
+                        showSuccess('Шаблон сохранен!');
+                        await fetchTemplate();
+                    } catch (e) { showError(e.message); }
+                    finally { isLoading.value = false; }
+                };
+
+                const getDayName = (dow) => ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье'][dow];
+
+                // --- Init ---
+                const initDashboard = async () => {
+                    try {
+                        await fetchProfile();
+                        await fetchBookings();
+                        await fetchExceptions();
+                        await fetchTemplate();
+                    } catch (e) { logout(); }
+                };
+
+                onMounted(() => {
+                    if (getToken()) {
+                        isAuthenticated.value = true;
+                        initDashboard();
+                    }
+                });
+
+                return {
+                    isAuthenticated, isLoading, authError, successMsg, errorMsg,
+                    currentTab, profile, 
+                    // Bookings Tab
+                    dateB, yearB, monthNameB, daysInMonthB, blanksB, selectedDateBFormatted,
+                    prevMonthB, nextMonthB, selectDateB, isSelectedB, isToday, fmtDate,
+                    bookingFilter, filteredBookings, bookingsByDate, fetchBookings,
+                    // Schedule Tab
+                    dateS, yearS, monthNameS, daysInMonthS, blanksS, selectedDateSFormatted,
+                    prevMonthS, nextMonthS, selectDateS, isSelectedS, excByDate,
+                    excForm, currentExcId, saveException, deleteException,
+                    // Template Tab
+                    scheduleTemplate, saveTemplate, getDayName,
+                    authMode,
+                    loginData, login,
+                    otpStep, otpData, sendOtp, verifyOtp,
+                    logout
+                };
+            }
+        }).mount('#app');
+    </script>
+    {% endverbatim %}
+</body>
+</html>
