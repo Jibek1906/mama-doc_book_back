@@ -2613,11 +2613,18 @@ class BookingCreateAPIView(CsrfExemptAPIView):
         )
         booking.set_services(services)
 
+        # Determine organization/branch for QR payload
+        first_branch = professional.branches.select_related("organization").first()
+        branch_id = first_branch.id if first_branch else None
+        organization_id = first_branch.organization_id if first_branch else None
+
         return Response(
             {
                 "data": {
                     "id": booking.id,
                     "confirmation_code": booking.confirmation_code,
+                    "organization_id": organization_id,
+                    "branch_id": branch_id,
                     "professional": {
                         "full_name": professional.full_name,
                         "photo_url": ProfessionalPreviewSerializer(

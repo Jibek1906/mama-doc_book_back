@@ -577,6 +577,8 @@ class BookingServiceShortSerializer(serializers.Serializer):
 class BookingCreateDataSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     confirmation_code = serializers.CharField()
+    organization_id = serializers.IntegerField(allow_null=True)
+    branch_id = serializers.IntegerField(allow_null=True)
     professional = BookingProfessionalSerializer()
     date = serializers.DateField()
     time = serializers.CharField()

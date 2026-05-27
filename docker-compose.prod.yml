@@ -59,6 +59,10 @@ services:
       - "3000"
     environment:
       - NEXT_PUBLIC_API_BASE_URL=/api/v1
+      # Server-side (SSR/RSC) fetches need an absolute URL. Inside the compose
+      # network, call backend directly to avoid nginx HTTP->HTTPS redirect and
+      # certificate mismatch on the internal hostname.
+      - API_URL=http://backend:8000/api/v1
 
   nginx:
     build: nginx
