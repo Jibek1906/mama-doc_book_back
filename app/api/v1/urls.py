@@ -16,20 +16,40 @@ urlpatterns = [
     re_path(r"^professionals/filter/?$", views.ProfessionalFilterAPIView.as_view()),
     re_path(r"^professionals/(?P<professional_id>\d+)/?$", views.ProfessionalDetailAPIView.as_view()),
     re_path(
+        r"^professionals/(?P<slug>[\w-]+)/?$",
+        views.ProfessionalDetailBySlugAPIView.as_view(),
+    ),
+    re_path(
         r"^professionals/(?P<professional_id>\d+)/calendar/?$",
         views.ProfessionalCalendarAPIView.as_view(),
+    ),
+    re_path(
+        r"^professionals/(?P<slug>[\w-]+)/calendar/?$",
+        views.ProfessionalCalendarBySlugAPIView.as_view(),
     ),
     re_path(
         r"^professionals/(?P<professional_id>\d+)/available-services/?$",
         views.ProfessionalAvailableServicesAPIView.as_view(),
     ),
     re_path(
+        r"^professionals/(?P<slug>[\w-]+)/available-services/?$",
+        views.ProfessionalAvailableServicesBySlugAPIView.as_view(),
+    ),
+    re_path(
         r"^professionals/(?P<professional_id>\d+)/available-times/?$",
         views.ProfessionalAvailableTimesAPIView.as_view(),
     ),
     re_path(
+        r"^professionals/(?P<slug>[\w-]+)/available-times/?$",
+        views.ProfessionalAvailableTimesBySlugAPIView.as_view(),
+    ),
+    re_path(
         r"^professionals/(?P<professional_id>\d+)/reviews/?$",
         views.ProfessionalReviewsAPIView.as_view(),
+    ),
+    re_path(
+        r"^professionals/(?P<slug>[\w-]+)/reviews/?$",
+        views.ProfessionalReviewsBySlugAPIView.as_view(),
     ),
 
     # services as separate category
@@ -38,6 +58,10 @@ urlpatterns = [
     # organizations / branches / feature flags
     re_path(r"^organizations/?$", views.OrganizationsAPIView.as_view()),
     re_path(r"^organizations/(?P<organization_id>\d+)/?$", views.OrganizationDetailAPIView.as_view()),
+    re_path(
+        r"^organizations/(?P<slug>[\w-]+)/?$",
+        views.OrganizationDetailBySlugAPIView.as_view(),
+    ),
     re_path(
         r"^organizations/(?P<organization_id>\d+)/professionals/?$",
         views.OrganizationProfessionalsAPIView.as_view(),
@@ -50,15 +74,31 @@ urlpatterns = [
         r"^organizations/(?P<organization_id>\d+)/branches/?$",
         views.OrganizationBranchesAPIView.as_view(),
     ),
+    re_path(
+        r"^organizations/(?P<slug>[\w-]+)/branches/?$",
+        views.OrganizationBranchesBySlugAPIView.as_view(),
+    ),
     re_path(r"^branches/?$", views.BranchesAPIView.as_view()),
     re_path(r"^branches/(?P<branch_id>\d+)/?$", views.BranchDetailAPIView.as_view()),
     re_path(r"^branches/(?P<branch_id>\d+)/professionals/?$", views.BranchProfessionalsAPIView.as_view()),
     re_path(r"^branches/(?P<branch_id>\d+)/specialists/?$", views.BranchSpecialistsAPIView.as_view()),
+    re_path(
+        r"^branches/(?P<slug>[\w-]+)/professionals/?$",
+        views.BranchProfessionalsBySlugAPIView.as_view(),
+    ),
+    re_path(
+        r"^branches/(?P<slug>[\w-]+)/specialists/?$",
+        views.BranchSpecialistsBySlugAPIView.as_view(),
+    ),
     re_path(r"^features/?$", views.FeatureFlagsAPIView.as_view()),
 
     re_path(r"^auth/send-otp/?$", views.SendOtpAPIView.as_view()),
     re_path(r"^auth/verify-otp/?$", views.VerifyOtpAPIView.as_view()),
     re_path(r"^auth/complete-profile/?$", views.CompleteClientProfileAPIView.as_view()),
+
+    # payments (PayLink)
+    re_path(r"^payments/paylink/?$", views.CreatePaylinkAPIView.as_view()),
+    re_path(r"^payment/webhook/?$", views.PaymentWebhookAPIView.as_view()),
 
     re_path(r"^meta/phone-countries/?$", views.PhoneCountriesAPIView.as_view()),
 

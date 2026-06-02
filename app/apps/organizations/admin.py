@@ -9,6 +9,7 @@ from .models import (
     Professional,
     Branch,
     BranchSchedule,
+    PaymentIntent,
     ProfessionalSchedule,
     ProfessionalSpecialty,
     OTPCode,
@@ -24,6 +25,8 @@ from .models import (
     Organization,
     ProfessionalAccount,
     PendingClientProfile,
+
+    BranchPaylinkSettings,
 )
 
 
@@ -38,6 +41,11 @@ class SpecialistAdmin(ModelAdmin):
 class BranchInline(TabularInline):
     model = Branch
     extra = 0
+    fields = (
+        "title",
+        "address",
+        "is_active",
+    )
 
 
 class BranchScheduleInline(TabularInline):
@@ -157,12 +165,99 @@ class OrganizationAdmin(ModelAdmin):
 
 @admin.register(Branch)
 class BranchAdmin(ModelAdmin):
-    list_display = ("id", "organization", "address", "is_active")
+    list_display = (
+        "id",
+        "organization",
+        "address",
+        "is_active",
+    )
+    list_editable = ("is_active",)
     list_filter = ("is_active", "organization")
     search_fields = ("address", "organization__name")
     ordering = ("id",)
     filter_horizontal = ("specialists",)
     inlines = [BranchScheduleInline]
+    fieldsets = (
+        (None, {"fields": ("organization", "title", "address", "is_active")}),
+        ("Специализации", {"fields": ("specialists",)}),
+    )
+
+
+@admin.register(BranchPaylinkSettings)
+class BranchPaylinkSettingsAdmin(ModelAdmin):
+    """Dedicated admin screen for PayLink settings.
+
+    Shows all branches and focuses only on PayLink related fields.
+    """
+
+    list_display = (
+        "id",
+        "organization",
+        "title",
+        "address",
+        "paylink_enabled",
+        "paylink_amount",
+        "has_paylink_token",
+        "paylink_token_preview",
+        "is_active",
+    )
+    list_editable = ("paylink_enabled", "paylink_amount")
+    list_filter = ("organization", "paylink_enabled", "is_active")
+    search_fields = ("title", "address", "organization__name")
+    ordering = ("id",)
+    list_per_page = 2000
+
+    readonly_fields = ("organization", "title", "address", "is_active")
+
+    fieldsets = (
+        (
+            "Филиал (информация)",
+            {"fields": ("organization", "title", "address", "is_active")},
+        ),
+        (
+            "Оплата/бронь (PayLink)",
+            {
+                "fields": (
+                    "paylink_enabled",
+                    "paylink_amount",
+                    "paylink_token",
+                )
+            },
+        ),
+    )
+
+    # Make it clearer that this is a settings screen, not the main Branch CRUD.
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related("organization")
+
+    @admin.display(description="Paylink token", boolean=True)
+    def has_paylink_token(self, obj: Branch) -> bool:
+        return bool((getattr(obj, "paylink_token", "") or "").strip())
+
+    @admin.display(description="Токен (префикс)")
+    def paylink_token_preview(self, obj: Branch) -> str:
+        token = (getattr(obj, "paylink_token", "") or "").strip()
+        if not token:
+            return ""
+        # show only small prefix to avoid leaking full token in list
+        return f"{token[:10]}…{token[-6:]}" if len(token) > 20 else token
+
+
+@admin.register(PaymentIntent)
+class PaymentIntentAdmin(ModelAdmin):
+    list_display = (
+        "id",
+        "branch",
+        "client",
+        "amount",
+        "status",
+        "transaction_id",
+        "paid_at",
+        "created_at",
+    )
+    list_filter = ("status", "branch")
+    search_fields = ("transaction_id", "paylink_url", "comment")
+    ordering = ("-created_at",)
 
 
 @admin.register(ProjectFeatureSettings)

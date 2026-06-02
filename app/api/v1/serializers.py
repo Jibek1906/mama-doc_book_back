@@ -6,6 +6,7 @@ from .utils import is_supported_phone, normalize_phone
 
 from apps.organizations.models import Booking, Professional, PhoneCountry, Review, Service, Specialist, ProjectFeatureSettings
 from apps.organizations.models import ProfessionalSchedule, ScheduleException
+from apps.organizations.models import PaymentIntent, Branch
 
 
 class GenderInputField(serializers.Field):
@@ -87,6 +88,7 @@ class ProfessionalPreviewSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "full_name",
+            "slug",
             "photo_url",
             "specialty",
             "rating",
@@ -260,6 +262,7 @@ class ProfessionalDetailSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "full_name",
+            "slug",
             "photo_url",
             "specialties",
             "rating",
@@ -591,6 +594,51 @@ class BookingCreateResponseSerializer(serializers.Serializer):
     data = BookingCreateDataSerializer()
 
 
+class CreatePaylinkSerializer(serializers.Serializer):
+    branch_id = serializers.IntegerField()
+
+    def validate_branch_id(self, value: int) -> int:
+        if not Branch.objects.filter(id=value, is_active=True, organization__is_active=True).exists():
+            raise serializers.ValidationError("Филиал не найден")
+        return value
+
+
+class CreatePaylinkResponseSerializer(serializers.Serializer):
+    payment_intent_id = serializers.IntegerField()
+    transaction_id = serializers.UUIDField()
+    amount = serializers.IntegerField()
+    paylink_url = serializers.URLField()
+
+
+class PaymentWebhookSerializer(serializers.Serializer):
+    # Based on example payload from bank/service.
+    account_no = serializers.CharField(required=False, allow_blank=True)
+    amount = serializers.FloatField(required=False)
+    currency_id = serializers.IntegerField(required=False)
+    currency_code = serializers.CharField(required=False, allow_blank=True)
+    operation_id = serializers.CharField(required=False, allow_blank=True)
+    comment = serializers.CharField(required=False, allow_blank=True)
+    operation_state = serializers.CharField(required=False, allow_blank=True)
+    qr_transaction_id = serializers.CharField(required=False, allow_blank=True)
+    elqr_id = serializers.CharField(required=False, allow_blank=True)
+
+
+class CreateBookingV2Serializer(serializers.Serializer):
+    """Booking creation that can require paid PaymentIntent for branches with paylink_enabled."""
+
+    professional_id = serializers.IntegerField(required=False)
+    branch_id = serializers.IntegerField(required=False, allow_null=True)
+    payment_intent_id = serializers.IntegerField(required=False, allow_null=True)
+    date = serializers.DateField()
+    time = serializers.TimeField(format="%H:%M", input_formats=["%H:%M"])
+    service_ids = serializers.ListField(child=serializers.IntegerField(), allow_empty=False)
+
+    def validate(self, attrs):
+        if attrs.get("professional_id") is None:
+            raise serializers.ValidationError({"professional_id": ["Обязательный параметр"]})
+        return attrs
+
+
 class MessageResponseSerializer(serializers.Serializer):
     message = serializers.CharField()
 
@@ -648,6 +696,7 @@ class MyBookingsResponseSerializer(serializers.Serializer):
 class OrganizationSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     name = serializers.CharField()
+    slug = serializers.CharField(required=False)
     logo_url = serializers.CharField(required=False)
     paylink_enabled = serializers.BooleanField(required=False)
     specialists_count = serializers.IntegerField()
@@ -661,8 +710,11 @@ class BranchSerializer(serializers.Serializer):
     organization_id = serializers.IntegerField()
     organization_name = serializers.CharField()
     title = serializers.CharField()
+    slug = serializers.CharField(required=False)
     address = serializers.CharField()
     professionals_count = serializers.IntegerField()
+    paylink_enabled = serializers.BooleanField(required=False)
+    paylink_amount = serializers.IntegerField(required=False)
 
 
 class BranchScheduleItemSerializer(serializers.Serializer):

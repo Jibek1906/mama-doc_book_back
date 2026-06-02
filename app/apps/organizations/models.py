@@ -4,8 +4,95 @@ import uuid
 from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
+from django.utils.text import slugify
 
 from api.v1.utils import label_for_day, time_range
+
+
+_CYRILLIC_TO_LATIN = {
+    # Russian
+    "а": "a",
+    "б": "b",
+    "в": "v",
+    "г": "g",
+    "д": "d",
+    "е": "e",
+    "ё": "e",
+    "ж": "zh",
+    "з": "z",
+    "и": "i",
+    "й": "y",
+    "к": "k",
+    "л": "l",
+    "м": "m",
+    "н": "n",
+    "о": "o",
+    "п": "p",
+    "р": "r",
+    "с": "s",
+    "т": "t",
+    "у": "u",
+    "ф": "f",
+    "х": "h",
+    "ц": "c",
+    "ч": "ch",
+    "ш": "sh",
+    "щ": "sch",
+    "ъ": "",
+    "ы": "y",
+    "ь": "",
+    "э": "e",
+    "ю": "yu",
+    "я": "ya",
+    # Kyrgyz (common additions)
+    "ң": "ng",
+    "ө": "o",
+    "ү": "u",
+    "ұ": "u",
+    "қ": "k",
+    "һ": "h",
+    "ә": "a",
+    "і": "i",
+}
+
+
+def _transliterate_to_latin(value: str) -> str:
+    """Best-effort Cyrillic -> Latin transliteration.
+
+    This project uses human-friendly latin slugs in URLs.
+    """
+
+    if not value:
+        return ""
+    s = str(value)
+    out = []
+    for ch in s:
+        lower = ch.lower()
+        if lower in _CYRILLIC_TO_LATIN:
+            repl = _CYRILLIC_TO_LATIN[lower]
+            out.append(repl)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _make_unique_slug(*, model: type[models.Model], base: str, slug_field: str = "slug") -> str:
+    """Generate a unique slug for a model.
+
+    - base: any string (name/title/full_name)
+    - model: Django model class
+    - slug_field: field name with uniqueness constraint
+    """
+
+    base_latin = _transliterate_to_latin(base)
+    raw = slugify(base_latin, allow_unicode=False) or "item"
+    slug = raw
+    i = 2
+    # Keep it deterministic and collision-free.
+    while model.objects.filter(**{slug_field: slug}).exists():
+        slug = f"{raw}-{i}"
+        i += 1
+    return slug
 
 
 class Specialist(models.Model):
@@ -30,6 +117,7 @@ class Organization(models.Model):
     """Top-level entity (organization/salon/etc). Used by frontend to fetch project data by id."""
 
     name = models.CharField(max_length=200, unique=True)
+    slug = models.SlugField(max_length=200, unique=True, blank=True, null=True)
     logo = models.ImageField(upload_to="organizations/logos/", blank=True, null=True)
     is_active = models.BooleanField(default=True)
     paylink_enabled = models.BooleanField(
@@ -50,6 +138,11 @@ class Organization(models.Model):
     def __str__(self) -> str:
         return self.name
 
+    def save(self, *args, **kwargs):
+        if not self.slug and self.name:
+            self.slug = _make_unique_slug(model=Organization, base=self.name)
+        super().save(*args, **kwargs)
+
 
 class Branch(models.Model):
     organization = models.ForeignKey(
@@ -62,8 +155,34 @@ class Branch(models.Model):
         related_name="branches",
     )
     title = models.CharField(max_length=200, blank=True, default="")
+    slug = models.SlugField(max_length=200, unique=True, blank=True, null=True)
     address = models.CharField(max_length=255, blank=True, default="")
     is_active = models.BooleanField(default=True)
+
+    # --- Payment / booking deposit ---
+    paylink_enabled = models.BooleanField(
+        default=False,
+        verbose_name="Оплата/бронь через Paylink включена",
+        help_text=(
+            "Если включено — перед созданием записи требуется оплата брони. "
+            "Если выключено — запись создаётся без оплаты."
+        ),
+    )
+    paylink_amount = models.IntegerField(
+        default=0,
+        verbose_name="Сумма брони (KGS)",
+        help_text="Сколько сом нужно оплатить для брони в этом филиале.",
+    )
+
+    paylink_token = models.TextField(
+        blank=True,
+        default="",
+        verbose_name="Paylink токен филиала",
+        help_text=(
+            "Bearer token для Bakai PayLink именно для этого филиала. "
+            "Если пусто — будет использован глобальный BAKAI_PAYLINK_TOKEN из .env"
+        ),
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -74,6 +193,80 @@ class Branch(models.Model):
 
     def __str__(self) -> str:
         return f"{self.organization.name} — {self.address or self.title or self.id}"
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            # Prefer title, fallback to address, then id placeholder.
+            base = self.title or self.address or f"branch-{self.organization_id or 'x'}"
+            self.slug = _make_unique_slug(model=Branch, base=base)
+        super().save(*args, **kwargs)
+
+
+class BranchPaylinkSettings(Branch):
+    """Proxy model for a dedicated admin page with PayLink settings per branch.
+
+    This lets admin manage payment toggles without mixing it into other branch fields.
+    """
+
+    class Meta:
+        proxy = True
+        verbose_name = "Настройки PayLink филиала"
+        verbose_name_plural = "Настройки PayLink по филиалам"
+
+
+class PaymentIntent(models.Model):
+    """Payment attempt / reservation.
+
+    Flow:
+    1) Front calls POST /payments/paylink with branch_id.
+    2) Backend creates PaymentIntent(status=pending) and requests Bakai PayLink.
+    3) Bank calls webhook -> status becomes paid/failed.
+    4) Front calls POST /bookings with payment_intent_id to create booking.
+    """
+
+    STATUS_PENDING = "pending"
+    STATUS_PAID = "paid"
+    STATUS_FAILED = "failed"
+    STATUS_EXPIRED = "expired"
+
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "pending"),
+        (STATUS_PAID, "paid"),
+        (STATUS_FAILED, "failed"),
+        (STATUS_EXPIRED, "expired"),
+    ]
+
+    branch = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="payment_intents")
+    client = models.ForeignKey(
+        "Client",
+        on_delete=models.PROTECT,
+        related_name="payment_intents",
+        null=True,
+        blank=True,
+        help_text="Клиент (если авторизован). Может быть null, если платёж инициирован до создания клиента.",
+    )
+    amount = models.IntegerField()
+
+    transaction_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    comment = models.CharField(max_length=255, blank=True, default="")
+
+    # Bakai PayLink response
+    paylink_url = models.URLField(blank=True, default="")
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    provider_payload = models.JSONField(null=True, blank=True)
+
+    paid_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Оплата (Paylink)"
+        verbose_name_plural = "Оплаты (Paylink)"
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self) -> str:
+        return f"PaymentIntent #{self.id} ({self.status}) {self.amount}KGS"
 
 
 class BranchSchedule(models.Model):
@@ -115,6 +308,7 @@ class Professional(models.Model):
     GENDER_CHOICES = [("male", "male"), ("female", "female")]
 
     full_name = models.CharField(max_length=200)
+    slug = models.SlugField(max_length=220, unique=True, blank=True, null=True)
     photo_url = models.ImageField(upload_to="professionals/", blank=True, null=True)
 
     # New structure: Professional is a universal professional (barber/manicurist/doctor/etc)
@@ -170,6 +364,11 @@ class Professional(models.Model):
 
     def __str__(self) -> str:
         return self.full_name
+
+    def save(self, *args, **kwargs):
+        if not self.slug and self.full_name:
+            self.slug = _make_unique_slug(model=Professional, base=self.full_name)
+        super().save(*args, **kwargs)
 
     def get_calendar(
         self,
@@ -552,6 +751,20 @@ class Booking(models.Model):
 
     client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="bookings")
     professional = models.ForeignKey(Professional, on_delete=models.CASCADE, related_name="bookings")
+    branch = models.ForeignKey(
+        Branch,
+        on_delete=models.PROTECT,
+        related_name="bookings",
+        null=True,
+        blank=True,
+    )
+    payment_intent = models.OneToOneField(
+        PaymentIntent,
+        on_delete=models.PROTECT,
+        related_name="booking",
+        null=True,
+        blank=True,
+    )
     booking_date = models.DateField()
     booking_time = models.TimeField()
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")

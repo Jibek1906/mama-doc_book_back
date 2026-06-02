@@ -199,6 +199,28 @@ SMS_PASSWORD = env("SMS_PASSWORD", default="")
 SMS_SENDER = env("SMS_SENDER", default="")
 SMS_API_URL = env("SMS_API_URL", default="https://smspro.nikita.kg/api/message")
 
+# --- Payment (Bakai PayLink) ---
+# Token is shared globally (provided by bank / merchant).
+BAKAI_PAYLINK_TOKEN = env("BAKAI_PAYLINK_TOKEN", default="")
+BAKAI_PAYLINK_BASE_URL = env(
+    "BAKAI_PAYLINK_BASE_URL",
+    default="https://openbanking-api.bakai.kg",
+)
+PAYLINK_REDIRECT_URL = env(
+    "PAYLINK_REDIRECT_URL",
+    default="",
+)
+
+# DEV/QA helper: do not call real bank API. CreatePaylink will return a mock URL,
+# and payment can be confirmed by calling our webhook manually.
+PAYLINK_MOCK_ENABLED = env.bool("PAYLINK_MOCK_ENABLED", default=False)
+
+# Optional: webhook IP allow-list (can be enforced at nginx and/or app level)
+PAYMENT_WEBHOOK_ALLOWED_IPS = env(
+    "PAYMENT_WEBHOOK_ALLOWED_IPS",
+    default="",
+).split()  # space-separated
+
 # Unfold Admin UI Settings
 UNFOLD = {
     "SITE_TITLE": "MamaDoc Admin",
@@ -245,7 +267,7 @@ UNFOLD = {
                         "link": "/admin/organizations/organization/",
                     },
                     {
-                        "title": "Филиалы",
+                        "title": "Филиалы (адреса)",
                         "icon": "location_on",
                         "link": "/admin/organizations/branch/",
                     },
@@ -273,6 +295,22 @@ UNFOLD = {
                         "title": "Клиенты",
                         "icon": "patient_list",
                         "link": "/admin/organizations/client/",
+                    },
+                ],
+            },
+            {
+                "title": "Оплата",
+                "separator": True,
+                "items": [
+                    {
+                        "title": "PayLink по филиалам (вкл/сумма/токен)",
+                        "icon": "payments",
+                        "link": "/admin/organizations/branchpaylinksettings/",
+                    },
+                    {
+                        "title": "Оплаты (PayLink)",
+                        "icon": "receipt_long",
+                        "link": "/admin/organizations/paymentintent/",
                     },
                 ],
             },

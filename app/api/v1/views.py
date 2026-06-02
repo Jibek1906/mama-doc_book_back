@@ -1,4 +1,5 @@
 import random
+import re
 import requests
 from datetime import timedelta
 
@@ -43,6 +44,7 @@ from apps.organizations.models import (
     ScheduleException,
     PendingClientProfile,
     BranchSchedule,
+    PaymentIntent,
 )
 
 from .serializers import (
@@ -81,6 +83,11 @@ from .serializers import (
     CompleteClientProfileResponseSerializer,
     VerifyPhoneCodeResponseSerializer,
     BookingCreateResponseSerializer,
+
+    CreatePaylinkSerializer,
+    CreatePaylinkResponseSerializer,
+    PaymentWebhookSerializer,
+    CreateBookingV2Serializer,
 
     # pro cabinet
     ProLoginSerializer,
@@ -227,6 +234,22 @@ EX_CANNOT_REVIEW = OpenApiExample(
     ),
     response_only=True,
 )
+
+
+def _get_client_ip(request) -> str:
+    xff = (request.META.get("HTTP_X_FORWARDED_FOR") or "").strip()
+    if xff:
+        # take first value
+        return xff.split(",")[0].strip()
+    return (request.META.get("REMOTE_ADDR") or "").strip()
+
+
+def _is_allowed_webhook_ip(request) -> bool:
+    allowed = [ip.strip() for ip in getattr(settings, "PAYMENT_WEBHOOK_ALLOWED_IPS", []) if ip.strip()]
+    if not allowed:
+        # if not configured, don't block here (nginx should protect prod)
+        return True
+    return _get_client_ip(request) in allowed
 
 
 def _get_pro_account_or_unauthorized(*, request) -> tuple[ProfessionalAccount | None, Response | None]:
@@ -1810,6 +1833,7 @@ class OrganizationsAPIView(CsrfExemptAPIView):
                 {
                     "id": org.id,
                     "name": org.name,
+                    "slug": getattr(org, "slug", ""),
                     "logo_url": request.build_absolute_uri(org.logo.url) if getattr(org, "logo", None) else "",
                     "paylink_enabled": getattr(org, "paylink_enabled", True),
                     "specialists_count": specialists_count,
@@ -1846,6 +1870,7 @@ class OrganizationDetailAPIView(CsrfExemptAPIView):
         data = {
             "id": org.id,
             "name": org.name,
+            "slug": getattr(org, "slug", ""),
             "logo_url": request.build_absolute_uri(org.logo.url) if getattr(org, "logo", None) else "",
             "paylink_enabled": getattr(org, "paylink_enabled", True),
             "specialists_count": specialists_count,
@@ -1858,6 +1883,7 @@ class OrganizationDetailAPIView(CsrfExemptAPIView):
             "branches": [
                 {
                     "id": branch.id,
+                    "slug": getattr(branch, "slug", ""),
                     "title": branch.title,
                     "address": branch.address,
                     "is_active": branch.is_active,
@@ -1866,6 +1892,26 @@ class OrganizationDetailAPIView(CsrfExemptAPIView):
             ],
         }
         return Response({"data": data})
+
+
+class OrganizationDetailBySlugAPIView(OrganizationDetailAPIView):
+    """Organization details resolved by slug (new, human-friendly URLs)."""
+
+    @extend_schema(
+        summary="Детали организации (по slug)",
+        auth=[],
+        responses={
+            200: OrganizationDetailResponseSerializer,
+            404: OpenApiResponse(response=ApiErrorSerializer, examples=[EX_NOT_FOUND]),
+            500: OpenApiResponse(response=ApiErrorSerializer, examples=[EX_SERVER_ERROR]),
+        },
+    )
+    def get(self, request, slug: str):
+        try:
+            org = Organization.objects.get(slug=slug, is_active=True)
+        except Organization.DoesNotExist:
+            return Response(api_error(error="not_found", message="Организация не найдена"), status=404)
+        return super().get(request, organization_id=org.id)
 
 
 class BranchesAPIView(CsrfExemptAPIView):
@@ -1899,8 +1945,11 @@ class BranchesAPIView(CsrfExemptAPIView):
                     "organization_id": br.organization_id,
                     "organization_name": br.organization.name,
                     "title": br.title,
+                    "slug": getattr(br, "slug", ""),
                     "address": br.address,
                     "professionals_count": professionals_count,
+                    "paylink_enabled": bool(getattr(br, "paylink_enabled", False)),
+                    "paylink_amount": int(getattr(br, "paylink_amount", 0) or 0),
                 }
             )
         return Response({"data": data})
@@ -1940,9 +1989,12 @@ class BranchDetailAPIView(CsrfExemptAPIView):
             "organization_id": br.organization_id,
             "organization_name": br.organization.name,
             "title": br.title,
+            "slug": getattr(br, "slug", ""),
             "address": br.address,
             "professionals_count": professionals_count,
             "schedule": list(schedule),
+            "paylink_enabled": bool(getattr(br, "paylink_enabled", False)),
+            "paylink_amount": int(getattr(br, "paylink_amount", 0) or 0),
         }
         return Response({"data": data})
 
@@ -2095,6 +2147,177 @@ class OrganizationBranchesAPIView(BranchesAPIView):
         return super().get(request)
 
 
+class OrganizationBranchesBySlugAPIView(BranchesAPIView):
+    """Branches list resolved by organization slug."""
+
+    @extend_schema(
+        summary="Список филиалов организации (по slug)",
+        auth=[],
+        responses={
+            200: BranchesListResponseSerializer,
+            404: OpenApiResponse(response=ApiErrorSerializer, examples=[EX_NOT_FOUND]),
+            500: OpenApiResponse(response=ApiErrorSerializer, examples=[EX_SERVER_ERROR]),
+        },
+    )
+    def get(self, request, slug: str):
+        try:
+            org = Organization.objects.get(slug=slug, is_active=True)
+        except Organization.DoesNotExist:
+            return Response(api_error(error="not_found", message="Организация не найдена"), status=404)
+        mutable_params = request.query_params.copy()
+        mutable_params["organization_id"] = str(org.id)
+        request._request.GET = mutable_params
+        return super().get(request)
+
+
+class BranchProfessionalsBySlugAPIView(BranchProfessionalsAPIView):
+    """Professionals list for a branch resolved by branch slug."""
+
+    @extend_schema(
+        summary="Список специалистов филиала (по slug)",
+        auth=[],
+        responses={
+            200: ProfessionalsListResponseSerializer,
+            404: OpenApiResponse(response=ApiErrorSerializer, examples=[EX_NOT_FOUND]),
+        },
+    )
+    def get(self, request, slug: str):
+        try:
+            br = Branch.objects.get(slug=slug, is_active=True)
+        except Branch.DoesNotExist:
+            return Response(api_error(error="not_found", message="Филиал не найден"), status=404)
+        return super().get(request, branch_id=br.id)
+
+
+class BranchSpecialistsBySlugAPIView(BranchSpecialistsAPIView):
+    """Specialists list for a branch resolved by branch slug."""
+
+    @extend_schema(
+        summary="Специализации филиала (по slug)",
+        auth=[],
+        responses={
+            200: SpecialistsListResponseSerializer,
+            404: OpenApiResponse(response=ApiErrorSerializer, examples=[EX_NOT_FOUND]),
+        },
+    )
+    def get(self, request, slug: str):
+        try:
+            br = Branch.objects.get(slug=slug, is_active=True)
+        except Branch.DoesNotExist:
+            return Response(api_error(error="not_found", message="Филиал не найден"), status=404)
+        return super().get(request, branch_id=br.id)
+
+
+class ProfessionalDetailBySlugAPIView(ProfessionalDetailAPIViewLegacy):
+    @extend_schema(
+        summary="Детали специалиста (по slug)",
+        auth=[],
+        responses={
+            200: ProfessionalDetailResponseSerializer,
+            404: OpenApiResponse(response=ApiErrorSerializer, examples=[EX_NOT_FOUND]),
+            500: OpenApiResponse(response=ApiErrorSerializer, examples=[EX_SERVER_ERROR]),
+        },
+    )
+    def get(self, request, slug: str):
+        try:
+            pro = Professional.objects.get(slug=slug, is_active=True)
+        except Professional.DoesNotExist:
+            return Response(api_error(error="not_found", message="Специалист не найден"), status=404)
+        return super().get(request, professional_id=pro.id)
+
+
+class ProfessionalCalendarBySlugAPIView(ProfessionalCalendarAPIView):
+    @extend_schema(
+        summary="Календарь специалиста на 30 дней (по slug)",
+        auth=[],
+        responses={
+            200: ProfessionalCalendarResponseSerializer,
+            404: OpenApiResponse(response=ApiErrorSerializer, examples=[EX_NOT_FOUND]),
+            500: OpenApiResponse(response=ApiErrorSerializer, examples=[EX_SERVER_ERROR]),
+        },
+    )
+    def get(self, request, slug: str):
+        try:
+            pro = Professional.objects.get(slug=slug, is_active=True)
+        except Professional.DoesNotExist:
+            return Response(api_error(error="not_found", message="Специалист не найден"), status=404)
+        return super().get(request, professional_id=pro.id)
+
+
+class ProfessionalAvailableServicesBySlugAPIView(ProfessionalAvailableServicesAPIView):
+    @extend_schema(
+        summary="Услуги специалиста, доступные для старта (по slug)",
+        auth=[],
+        responses={
+            200: ProfessionalAvailableServicesResponseSerializer,
+            400: OpenApiResponse(response=ApiErrorSerializer, examples=[EX_VALIDATION_ERROR]),
+            404: OpenApiResponse(response=ApiErrorSerializer, examples=[EX_NOT_FOUND]),
+        },
+    )
+    def get(self, request, slug: str):
+        try:
+            pro = Professional.objects.get(slug=slug, is_active=True)
+        except Professional.DoesNotExist:
+            return Response(api_error(error="not_found", message="Специалист не найден"), status=404)
+        return super().get(request, professional_id=pro.id)
+
+
+class ProfessionalAvailableTimesBySlugAPIView(ProfessionalAvailableTimesAPIView):
+    @extend_schema(
+        summary="Время специалиста, доступное для услуг (по slug)",
+        auth=[],
+        responses={
+            200: ProfessionalAvailableTimesResponseSerializer,
+            400: OpenApiResponse(response=ApiErrorSerializer, examples=[EX_VALIDATION_ERROR]),
+            404: OpenApiResponse(response=ApiErrorSerializer, examples=[EX_NOT_FOUND]),
+        },
+    )
+    def get(self, request, slug: str):
+        try:
+            pro = Professional.objects.get(slug=slug, is_active=True)
+        except Professional.DoesNotExist:
+            return Response(api_error(error="not_found", message="Специалист не найден"), status=404)
+        return super().get(request, professional_id=pro.id)
+
+
+class ProfessionalReviewsBySlugAPIView(ProfessionalReviewsAPIViewLegacy):
+    @extend_schema(
+        summary="Отзывы специалиста (по slug)",
+        auth=[],
+        responses={
+            200: ReviewsPaginatedResponseSerializer,
+            400: OpenApiResponse(response=ApiErrorSerializer, examples=[EX_VALIDATION_ERROR]),
+            404: OpenApiResponse(response=ApiErrorSerializer, examples=[EX_NOT_FOUND]),
+            500: OpenApiResponse(response=ApiErrorSerializer, examples=[EX_SERVER_ERROR]),
+        },
+    )
+    def get(self, request, slug: str):
+        try:
+            pro = Professional.objects.get(slug=slug, is_active=True)
+        except Professional.DoesNotExist:
+            return Response(api_error(error="not_found", message="Специалист не найден"), status=404)
+        return super().get(request, professional_id=pro.id)
+
+    @extend_schema(
+        summary="Оставить отзыв специалисту (по slug, требует авторизации)",
+        request=CreateReviewSerializer,
+        responses={
+            201: OpenApiResponse(description="Отзыв отправлен на модерацию"),
+            400: OpenApiResponse(response=ApiErrorSerializer, examples=[EX_VALIDATION_ERROR, EX_CLIENT_NOT_FOUND, EX_CANNOT_REVIEW]),
+            401: OpenApiResponse(response=ApiErrorSerializer, examples=[EX_NOT_AUTHENTICATED]),
+            403: OpenApiResponse(response=ApiErrorSerializer, examples=[EX_FORBIDDEN]),
+            404: OpenApiResponse(response=ApiErrorSerializer, examples=[EX_NOT_FOUND]),
+            500: OpenApiResponse(response=ApiErrorSerializer, examples=[EX_SERVER_ERROR]),
+        },
+    )
+    def post(self, request, slug: str):
+        try:
+            pro = Professional.objects.get(slug=slug, is_active=True)
+        except Professional.DoesNotExist:
+            return Response(api_error(error="not_found", message="Специалист не найден"), status=404)
+        return super().post(request, professional_id=pro.id)
+
+
 class FeatureFlagsAPIView(CsrfExemptAPIView):
     @extend_schema(
         summary="Фичи проекта: филиалы и paylink",
@@ -2117,6 +2340,7 @@ class FeatureFlagsAPIView(CsrfExemptAPIView):
                 # capabilities: whether per-entity toggles are supported by backend
                 "paylink_by_organization": True,
                 "paylink_by_professional": True,
+                "paylink_by_branch": True,
             }
         )
 
@@ -2135,6 +2359,240 @@ def _is_paylink_enabled_for_professional(*, professional: Professional) -> bool:
         org_enabled = any(b.organization.paylink_enabled for b in professional.branches.select_related("organization") if b.organization)
 
     return bool(global_enabled and org_enabled and getattr(professional, "paylink_enabled", True))
+
+
+def _is_paylink_enabled_for_branch(*, branch: Branch) -> bool:
+    """Effective paylink state for branch: global AND organization AND branch."""
+
+    feature_settings = ProjectFeatureSettings.objects.order_by("id").first()
+    global_enabled = bool(getattr(settings, "FEATURE_PAYLINK_ENABLED", True))
+    if feature_settings is not None:
+        global_enabled = global_enabled and bool(feature_settings.paylink_enabled)
+
+    org_enabled = bool(getattr(branch.organization, "paylink_enabled", True)) if branch.organization else True
+    return bool(global_enabled and org_enabled and bool(getattr(branch, "paylink_enabled", False)))
+
+
+class CreatePaylinkAPIView(CsrfExemptAPIView):
+    """Create Bakai PayLink for branch deposit."""
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.AllowAny]
+
+    @extend_schema(
+        summary="Создать платежную ссылку (PayLink) для брони",
+        auth=[],
+        request=CreatePaylinkSerializer,
+        responses={200: CreatePaylinkResponseSerializer, 400: OpenApiResponse(response=ApiErrorSerializer, examples=[EX_VALIDATION_ERROR])},
+    )
+    @transaction.atomic
+    def post(self, request):
+        s = CreatePaylinkSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        branch_id = int(s.validated_data["branch_id"])
+
+        try:
+            branch = Branch.objects.select_related("organization").get(
+                id=branch_id,
+                is_active=True,
+                organization__is_active=True,
+            )
+        except Branch.DoesNotExist:
+            return Response(api_error(error="not_found", message="Филиал не найден"), status=404)
+
+        if not _is_paylink_enabled_for_branch(branch=branch):
+            return Response(
+                api_error(
+                    error="validation_error",
+                    message="Невалидные данные",
+                    details={"branch_id": ["Для этого филиала оплата/бронь отключена"]},
+                ),
+                status=400,
+            )
+
+        amount = int(getattr(branch, "paylink_amount", 0) or 0)
+        if amount <= 0:
+            return Response(
+                api_error(
+                    error="validation_error",
+                    message="Невалидные данные",
+                    details={"amount": ["Сумма брони не задана"]},
+                ),
+                status=400,
+            )
+
+        # Allow per-branch token override (admin-configurable).
+        # IMPORTANT: if branch token is set but invalid (e.g. placeholder), we should fallback to global token.
+        branch_token = (getattr(branch, "paylink_token", "") or "").strip()
+        global_token = (getattr(settings, "BAKAI_PAYLINK_TOKEN", "") or "").strip()
+
+        # Very lightweight guard against common placeholders.
+        # If you want strict behavior (never fallback), remove this block.
+        bad_prefixes = ("TEST_", "PLACEHOLDER", "DUMMY")
+        if branch_token and branch_token.upper().startswith(bad_prefixes):
+            branch_token = ""
+
+        token = branch_token or global_token
+
+        if not token:
+            return Response(
+                api_error(
+                    error="server_error",
+                    message="PayLink token не настроен",
+                ),
+                status=500,
+            )
+
+        # Add transaction_id to redirect_url so frontend can read it after payment.
+        # It becomes: <PAYLINK_REDIRECT_URL>?tx=<uuid>
+        redirect_url = (getattr(settings, "PAYLINK_REDIRECT_URL", "") or "").strip()
+
+        client = None
+        if getattr(request, "user", None) and request.user.is_authenticated:
+            try:
+                client = Client.objects.get(user=request.user)
+            except Client.DoesNotExist:
+                client = None
+
+        intent = PaymentIntent.objects.create(
+            branch=branch,
+            client=client,
+            amount=amount,
+            # IMPORTANT: include UUID in comment so webhook can reliably find transaction
+            # (webhook parser searches UUID in comment)
+            comment="",
+            status=PaymentIntent.STATUS_PENDING,
+        )
+        intent.comment = f"Оплата брони филиала #{branch.id} tx={intent.transaction_id}"
+        intent.save(update_fields=["comment", "updated_at"])
+
+        if redirect_url:
+            sep = "&" if "?" in redirect_url else "?"
+            redirect_url = f"{redirect_url}{sep}tx={intent.transaction_id}"
+
+        base_url = (getattr(settings, "BAKAI_PAYLINK_BASE_URL", "https://openbanking-api.bakai.kg") or "").rstrip("/")
+        url = f"{base_url}/api/PayLink/CreatePayLink"
+        payload = {
+            "amount": amount,
+            "transactionID": str(intent.transaction_id),
+            "comment": intent.comment,
+            "redirectURL": redirect_url,
+            "ttlUnits": 0,
+            "ttl": 0,
+        }
+
+        # DEV/QA mode: do not call real bank API
+        if bool(getattr(settings, "PAYLINK_MOCK_ENABLED", False)):
+            paylink_url = f"https://paylink.mock/{intent.transaction_id}"
+            intent.paylink_url = paylink_url
+            intent.provider_payload = {"request": payload, "response": paylink_url, "mock": True}
+            intent.save(update_fields=["paylink_url", "provider_payload", "updated_at"])
+            return Response(
+                {
+                    "payment_intent_id": intent.id,
+                    "transaction_id": str(intent.transaction_id),
+                    "amount": amount,
+                    "paylink_url": paylink_url,
+                }
+            )
+
+        try:
+            r = requests.post(
+                url,
+                headers={
+                    "accept": "*/*",
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=20,
+            )
+            r.raise_for_status()
+            paylink_url = (r.text or "").strip().strip('"')
+        except Exception as e:
+            error_payload = {
+                "error": str(e),
+            }
+            if "r" in locals():
+                try:
+                    error_payload["status_code"] = r.status_code
+                    error_payload["response_text"] = (r.text or "").strip()
+                except Exception:
+                    pass
+            intent.status = PaymentIntent.STATUS_FAILED
+            intent.provider_payload = error_payload
+            intent.save(update_fields=["status", "provider_payload", "updated_at"])
+            print(f"PayLink create failed: {error_payload}")
+            return Response(
+                api_error(
+                    error="server_error",
+                    message="Не удалось создать PayLink",
+                    details=error_payload,
+                ),
+                status=500,
+            )
+
+        intent.paylink_url = paylink_url
+        intent.provider_payload = {"request": payload, "response": paylink_url}
+        intent.save(update_fields=["paylink_url", "provider_payload", "updated_at"])
+
+        return Response(
+            {
+                "payment_intent_id": intent.id,
+                "transaction_id": str(intent.transaction_id),
+                "amount": amount,
+                "paylink_url": paylink_url,
+            }
+        )
+
+
+class PaymentWebhookAPIView(CsrfExemptAPIView):
+    """Webhook called by bank/payment service when payment is completed."""
+
+    @extend_schema(
+        summary="Webhook оплаты (Paylink)",
+        auth=[],
+        request=PaymentWebhookSerializer,
+        responses={200: MessageResponseSerializer, 400: OpenApiResponse(response=ApiErrorSerializer, examples=[EX_VALIDATION_ERROR])},
+    )
+    @transaction.atomic
+    def post(self, request):
+        if not _is_allowed_webhook_ip(request):
+            return Response(api_error(error="forbidden", message="Нет доступа"), status=403)
+
+        s = PaymentWebhookSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        data = s.validated_data
+
+        # We need to extract transaction UUID from comment like: "Оплата заказа #375" or custom.
+        comment = (data.get("comment") or "").strip()
+
+        # Prefer strict UUID in comment if present
+        tx_uuid = None
+        m = re.search(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", comment)
+        if m:
+            tx_uuid = m.group(0)
+
+        # If no UUID in comment, try by operation_id mapping (not supported here), so fail.
+        if not tx_uuid:
+            return Response(api_error(error="validation_error", message="Невалидные данные", details={"comment": ["Не найден transactionID"]}), status=400)
+
+        try:
+            intent = PaymentIntent.objects.select_for_update().get(transaction_id=tx_uuid)
+        except PaymentIntent.DoesNotExist:
+            return Response(api_error(error="not_found", message="Платёж не найден"), status=404)
+
+        state = (data.get("operation_state") or "").strip().lower()
+        intent.provider_payload = {**(intent.provider_payload or {}), "webhook": data}
+
+        if state == "success":
+            intent.status = PaymentIntent.STATUS_PAID
+            intent.paid_at = timezone.now()
+        else:
+            intent.status = PaymentIntent.STATUS_FAILED
+
+        intent.save(update_fields=["status", "paid_at", "provider_payload", "updated_at"])
+        return Response({"message": "ok"})
 
 class SendOtpAPIView(CsrfExemptAPIView):
     @extend_schema(
@@ -2491,9 +2949,17 @@ class BookingCreateAPIView(CsrfExemptAPIView):
     )
     @transaction.atomic
     def post(self, request):
-        s = CreateBookingSerializer(data=request.data)
-        s.is_valid(raise_exception=True)
-        data = s.validated_data
+        # Backward compatible:
+        # - old payload: {professional_id, date, time, service_ids}
+        # - new payload: {professional_id, branch_id?, payment_intent_id?, date, time, service_ids}
+        s_v2 = CreateBookingV2Serializer(data=request.data)
+        if s_v2.is_valid():
+            data = s_v2.validated_data
+        else:
+            # fallback to legacy validator to keep old clients working
+            s = CreateBookingSerializer(data=request.data)
+            s.is_valid(raise_exception=True)
+            data = s.validated_data
 
         try:
             client = Client.objects.get(user=request.user)
@@ -2515,6 +2981,70 @@ class BookingCreateAPIView(CsrfExemptAPIView):
             professional = Professional.objects.get(id=data["professional_id"], is_active=True)
         except Professional.DoesNotExist:
             return Response(api_error(error="not_found", message="Специалист не найден"), status=404)
+
+        # --- resolve branch (optional) and enforce deposit payment if enabled ---
+        branch = None
+        branch_id = data.get("branch_id")
+        if branch_id is not None:
+            try:
+                branch = Branch.objects.select_related("organization").get(id=int(branch_id), is_active=True, organization__is_active=True)
+            except Exception:
+                return Response(
+                    api_error(
+                        error="validation_error",
+                        message="Невалидные данные",
+                        details={"branch_id": ["Филиал не найден"]},
+                    ),
+                    status=400,
+                )
+
+        # If branch not specified, infer from professional's first branch (legacy behavior)
+        if branch is None:
+            branch = professional.branches.select_related("organization").filter(is_active=True, organization__is_active=True).first()
+
+        # enforce payment when branch requires it
+        payment_intent = None
+        if branch and _is_paylink_enabled_for_branch(branch=branch) and int(getattr(branch, "paylink_amount", 0) or 0) > 0:
+            pid = data.get("payment_intent_id")
+            if not pid:
+                return Response(
+                    api_error(
+                        error="payment_required",
+                        message="Требуется оплата брони",
+                        details={"branch_id": branch.id, "amount": int(branch.paylink_amount)},
+                    ),
+                    status=402,
+                )
+
+            try:
+                payment_intent = PaymentIntent.objects.select_related("branch").get(id=int(pid))
+            except Exception:
+                return Response(
+                    api_error(
+                        error="validation_error",
+                        message="Невалидные данные",
+                        details={"payment_intent_id": ["Платёж не найден"]},
+                    ),
+                    status=400,
+                )
+            if payment_intent.status != PaymentIntent.STATUS_PAID:
+                return Response(
+                    api_error(
+                        error="payment_not_paid",
+                        message="Платёж не подтверждён",
+                        details={"payment_intent_id": payment_intent.id, "status": payment_intent.status},
+                    ),
+                    status=402,
+                )
+            if payment_intent.branch_id != branch.id:
+                return Response(
+                    api_error(
+                        error="validation_error",
+                        message="Невалидные данные",
+                        details={"payment_intent_id": ["Платёж относится к другому филиалу"]},
+                    ),
+                    status=400,
+                )
 
         services = list(
             Service.objects.filter(
@@ -2604,6 +3134,8 @@ class BookingCreateAPIView(CsrfExemptAPIView):
         booking = Booking.objects.create(
             client=client,
             professional=professional,
+            branch=branch,
+            payment_intent=payment_intent,
             booking_date=data["date"],
             booking_time=data["time"],
             status="confirmed",
@@ -2614,9 +3146,8 @@ class BookingCreateAPIView(CsrfExemptAPIView):
         booking.set_services(services)
 
         # Determine organization/branch for QR payload
-        first_branch = professional.branches.select_related("organization").first()
-        branch_id = first_branch.id if first_branch else None
-        organization_id = first_branch.organization_id if first_branch else None
+        organization_id = branch.organization_id if branch else None
+        branch_id = branch.id if branch else None
 
         return Response(
             {
