@@ -6,6 +6,9 @@ django-environ==0.12.0
 drf-spectacular==0.28.0
 pillow==10.4.0
 
+# GraphQL (keeps REST/Swagger intact; adds a separate /graphql endpoint)
+strawberry-graphql-django==0.47.0
+
 psycopg[binary]==3.2.9
 gunicorn==23.0.0
 requests==2.31.0

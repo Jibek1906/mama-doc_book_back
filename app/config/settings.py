@@ -20,6 +20,11 @@ ALLOWED_HOSTS = env(
 DOMAIN = env("DOMAIN", default="localhost")
 PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", default="http://localhost:8000")
 
+# Bot/service access for GraphQL admin mutations.
+# This is an additional auth layer besides JWT. The bot should send:
+#   X-BOT-TOKEN: <BOT_GRAPHQL_TOKEN>
+BOT_GRAPHQL_TOKEN = env("BOT_GRAPHQL_TOKEN", default="")
+
 # Optional release marker (useful to verify prod deploy)
 RELEASE = env("RELEASE", default="dev")
 
@@ -38,6 +43,8 @@ INSTALLED_APPS = [
     "drf_spectacular",
     "corsheaders",
     "api",
+    # GraphQL (does not affect REST urls)
+    "strawberry.django",
     "apps.organizations.apps.OrganizationsConfig",
 ]
 
@@ -151,8 +158,11 @@ SPECTACULAR_SETTINGS = {
             }
         }
     },
-    # Default security (public endpoints explicitly set auth=[] in @extend_schema)
-    "SECURITY": [{"bearerAuth": []}],
+    # Do NOT set global security.
+    # We have mostly public endpoints; protected ones explicitly set authentication_classes.
+    # Swagger UI can still authorize with Bearer token because securitySchemes is present.
+    # Public endpoints should not appear as requiring auth.
+    "SECURITY": [],
     # Avoid duplicated operationId when both /api/v1/* and /v1/* are exposed.
     "CAMELIZE_NAMES": False,
 

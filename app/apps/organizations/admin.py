@@ -155,7 +155,7 @@ class ServiceAdmin(ModelAdmin):
 
 @admin.register(Organization)
 class OrganizationAdmin(ModelAdmin):
-    list_display = ("id", "name", "paylink_enabled", "is_active", "created_at")
+    list_display = ("id", "name", "api_key", "paylink_enabled", "is_active", "created_at")
     list_filter = ("is_active",)
     search_fields = ("name",)
     inlines = [BranchInline]

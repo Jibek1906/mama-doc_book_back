@@ -131,6 +131,20 @@ http {
             proxy_redirect off;
         }
 
+        # Kuma's requested specific path
+        location = /api/payment/webhook/ {
+            allow 46.101.156.24;
+            deny all;
+
+            # We rewrite it to the actual DRF endpoint
+            rewrite ^/api/payment/webhook/(.*)$ /api/v1/payment/webhook/$1 break;
+            proxy_pass http://backend;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_redirect off;
+        }
+
         location = /pro-cabinet {
             return 301 /pro-cabinet/;
         }

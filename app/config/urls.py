@@ -23,6 +23,11 @@ class HiddenSpectacularJSONAPIView(SpectacularJSONAPIView):
 
 from django.views.generic import TemplateView
 
+from django.views.decorators.csrf import csrf_exempt
+
+from api.graphql_schema import schema as graphql_schema
+from api.graphql_view import MamaDocGraphQLView
+
 urlpatterns = [
     # Legacy admin URLs must not exist anymore
     path("admin/clinic/", lambda request: HttpResponseNotFound("Not Found")),
@@ -48,6 +53,18 @@ urlpatterns = [
         "docs/",
         SpectacularSwaggerView.as_view(url_name="schema-json"),
         name="swagger-ui-alias",
+    ),
+
+    # GraphQL endpoint (new, REST remains unchanged)
+    path(
+        "graphql/",
+        csrf_exempt(
+            MamaDocGraphQLView.as_view(
+                schema=graphql_schema,
+                graphql_ide="graphiql" if settings.DEBUG else None,
+            )
+        ),
+        name="graphql",
     ),
 ]
 

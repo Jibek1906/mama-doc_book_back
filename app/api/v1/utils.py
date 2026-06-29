@@ -1,13 +1,41 @@
 import random
 import re
 from datetime import date, datetime, time, timedelta
+from urllib.parse import urlparse, urlunparse
 
+from django.conf import settings
 from django.utils import timezone
 from rest_framework.views import exception_handler
 
 
+INTERNAL_MEDIA_HOSTS = {"backend:8000", "localhost:8000", "127.0.0.1:8000"}
+
+
 def api_error(*, error: str, message: str, details=None):
     return {"error": error, "message": message, "details": details or {}}
+
+
+def public_absolute_url(path: str) -> str:
+    """Build a browser-accessible absolute URL for API media/static fields."""
+
+    if not path:
+        return ""
+
+    raw = str(path).strip()
+    parsed = urlparse(raw)
+
+    if parsed.scheme in {"http", "https"}:
+        if parsed.netloc not in INTERNAL_MEDIA_HOSTS:
+            return raw
+        raw = urlunparse(("", "", parsed.path, "", parsed.query, parsed.fragment))
+
+    public_base_url = str(getattr(settings, "PUBLIC_BASE_URL", "")).rstrip("/")
+    if not public_base_url:
+        return raw
+
+    if raw.startswith("/"):
+        return f"{public_base_url}{raw}"
+    return f"{public_base_url}/{raw}"
 
 
 def drf_exception_handler(exc, context):

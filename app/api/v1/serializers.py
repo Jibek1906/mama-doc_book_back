@@ -2,7 +2,7 @@ from rest_framework import serializers
 
 from django.conf import settings
 
-from .utils import is_supported_phone, normalize_phone
+from .utils import is_supported_phone, normalize_phone, public_absolute_url
 
 from apps.organizations.models import Booking, Professional, PhoneCountry, Review, Service, Specialist, ProjectFeatureSettings
 from apps.organizations.models import ProfessionalSchedule, ScheduleException
@@ -65,16 +65,15 @@ class SpecialistSerializer(serializers.ModelSerializer):
         )
 
     def get_icon_url(self, obj: Specialist) -> str:
-        request = self.context.get("request")
         if obj.icon_url:
             raw = str(obj.icon_url)
             # Если в БД лежит путь до static (seed), не добавляем /media/
             if raw.startswith("/static/") or raw.startswith("static/"):
                 path = raw if raw.startswith("/") else f"/{raw}"
-                return request.build_absolute_uri(path) if request else path
+                return public_absolute_url(path)
 
             url = obj.icon_url.url
-            return request.build_absolute_uri(url) if request else url
+            return public_absolute_url(url)
         return ""
 
 
@@ -104,15 +103,14 @@ class ProfessionalPreviewSerializer(serializers.ModelSerializer):
         return [{"id": b.id, "title": b.title, "address": b.address, "organization_id": b.organization_id} for b in obj.branches.all()]
 
     def get_photo_url(self, obj: Professional) -> str:
-        request = self.context.get("request")
         if obj.photo_url:
             raw = str(obj.photo_url)
             if raw.startswith("/static/") or raw.startswith("static/"):
                 path = raw if raw.startswith("/") else f"/{raw}"
-                return request.build_absolute_uri(path) if request else path
+                return public_absolute_url(path)
 
             url = obj.photo_url.url
-            return request.build_absolute_uri(url) if request else url
+            return public_absolute_url(url)
         return ""
 
     def get_specialty(self, obj: Professional) -> str:
@@ -230,20 +228,19 @@ class ReviewSerializer(serializers.ModelSerializer):
         2) Review.client_avatar (legacy string)
         """
 
-        request = self.context.get("request")
         if getattr(obj, "client", None) and getattr(obj.client, "photo", None):
             url = obj.client.photo.url
-            return request.build_absolute_uri(url) if request else url
+            return public_absolute_url(url)
 
         raw = (getattr(obj, "client_avatar", "") or "").strip()
         if not raw:
             return ""
         if raw.startswith("http://") or raw.startswith("https://"):
-            return raw
+            return public_absolute_url(raw)
         # allow stored relative path
         if raw.startswith("/"):
-            return request.build_absolute_uri(raw) if request else raw
-        return request.build_absolute_uri(f"/{raw}") if request else raw
+            return public_absolute_url(raw)
+        return public_absolute_url(f"/{raw}")
 
 
 class ProfessionalDetailSerializer(serializers.ModelSerializer):
@@ -291,15 +288,14 @@ class ProfessionalDetailSerializer(serializers.ModelSerializer):
         return [{"id": b.id, "title": b.title, "address": b.address, "organization_id": b.organization_id} for b in obj.branches.all()]
 
     def get_photo_url(self, obj: Professional) -> str:
-        request = self.context.get("request")
         if obj.photo_url:
             raw = str(obj.photo_url)
             if raw.startswith("/static/") or raw.startswith("static/"):
                 path = raw if raw.startswith("/") else f"/{raw}"
-                return request.build_absolute_uri(path) if request else path
+                return public_absolute_url(path)
 
             url = obj.photo_url.url
-            return request.build_absolute_uri(url) if request else url
+            return public_absolute_url(url)
         return ""
 
     def get_rating(self, obj: Professional) -> float:
@@ -367,12 +363,9 @@ class PhoneCountrySerializer(serializers.ModelSerializer):
         fields = ("code", "name", "dial_code", "flag")
 
     def get_flag(self, obj: PhoneCountry) -> str:
-        request = self.context.get("request")
         if obj.flag:
             url = obj.flag.url
-            if request:
-                return request.build_absolute_uri(url)
-            return url
+            return public_absolute_url(url)
         return ""
 
 
@@ -525,6 +518,27 @@ class ProScheduleExceptionCreateSerializer(serializers.Serializer):
     break_end = serializers.TimeField(format="%H:%M", input_formats=["%H:%M"], required=False, allow_null=True)
 
 
+class PartnerBookingSerializer(serializers.ModelSerializer):
+    date = serializers.DateField(source="booking_date", format="%d.%m.%Y")
+    time = serializers.TimeField(source="booking_time", format="%H:%M")
+    patient_phone = serializers.CharField(source="client.phone")
+    patient_name = serializers.CharField(source="client.full_name")
+    services = serializers.SerializerMethodField()
+    professional_id = serializers.IntegerField(source="professional.id")
+    professional_name = serializers.CharField(source="professional.full_name")
+    updated_at = serializers.DateTimeField()
+
+    class Meta:
+        model = Booking
+        fields = (
+            "id", "confirmation_code", "date", "time", "status", "total_price", 
+            "patient_phone", "patient_name", "services", "professional_id", 
+            "professional_name", "updated_at"
+        )
+
+    def get_services(self, obj):
+        return [{"id": bs.service_id, "name": bs.service.name} for bs in obj.booking_services.all()]
+
 class ProBookingSerializer(serializers.ModelSerializer):
     date = serializers.DateField(source="booking_date")
     time = serializers.TimeField(source="booking_time", format="%H:%M")
@@ -539,10 +553,7 @@ class ProBookingSerializer(serializers.ModelSerializer):
 
     def get_patient_photo_url(self, obj):
         if obj.client and obj.client.photo:
-            request = self.context.get("request")
-            if request:
-                return request.build_absolute_uri(obj.client.photo.url)
-            return obj.client.photo.url
+            return public_absolute_url(obj.client.photo.url)
         return ""
 
     def get_services(self, obj):

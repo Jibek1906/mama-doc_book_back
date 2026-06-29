@@ -120,4 +120,7 @@ urlpatterns = [
         views.ProScheduleExceptionDeleteAPIView.as_view(),
     ),
     re_path(r"^pro/me/bookings/?$", views.ProBookingsAPIView.as_view()),
+
+    # Partner bookings API
+    re_path(r"^partner/bookings/?$", views.PartnerBookingsAPIView.as_view()),
 ]

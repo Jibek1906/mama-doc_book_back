@@ -1,6 +1,9 @@
 import random
 import re
 import requests
+import logging
+import xml.etree.ElementTree as ET
+import uuid
 from datetime import timedelta
 
 from django.contrib.auth.models import User
@@ -100,6 +103,7 @@ from .serializers import (
     ProScheduleExceptionSerializer,
     ProScheduleExceptionCreateSerializer,
     ProBookingSerializer,
+    PartnerBookingSerializer,
 
     BranchDetailResponseSerializer,
 )
@@ -110,8 +114,128 @@ from .utils import (
     label_for_day,
     make_confirmation_code,
     normalize_phone,
+    public_absolute_url,
     time_range,
 )
+
+
+logger = logging.getLogger(__name__)
+
+
+def _send_sms_code(*, phone: str, code: str) -> tuple[bool, dict]:
+    """Send OTP via configured SMS provider.
+
+    Returns: (ok, meta)
+    meta is safe to include into logs and (optionally) API error details.
+    """
+
+    login = getattr(settings, "SMS_LOGIN", "")
+    password = getattr(settings, "SMS_PASSWORD", "")
+    sender = getattr(settings, "SMS_SENDER", "")
+
+    if not (login and password and sender):
+        return False, {
+            "reason": "sms_not_configured",
+            "has_login": bool(login),
+            "has_password": bool(password),
+            "has_sender": bool(sender),
+        }
+
+    # Keep project-normalized E.164-like phone format (+996..., +7...)
+    # This matches the previous behavior and is easier to debug.
+    provider_phone = (phone or "").strip()
+
+    message_id = str(uuid.uuid4())
+
+    xml_data = f"""<?xml version="1.0" encoding="UTF-8"?>
+<message>
+    <id>{message_id}</id>
+    <login>{login}</login>
+    <pwd>{password}</pwd>
+    <sender>{sender}</sender>
+    <text>Код подтверждения: {code}</text>
+    <phones>
+        <phone>{provider_phone}</phone>
+    </phones>
+</message>"""
+
+    url = getattr(settings, "SMS_API_URL", "https://smspro.nikita.kg/api/message")
+    try:
+        resp = requests.post(
+            url,
+            data=xml_data.encode("utf-8"),
+            headers={"Content-Type": "application/xml"},
+            timeout=10,
+        )
+
+        status_code = int(getattr(resp, "status_code", 0) or 0)
+        ok_http = 200 <= status_code < 300
+
+        # SMSPro may return 200 even for logical errors.
+        # Parse XML response to extract provider status/id/phones.
+        provider_status = None
+        provider_id = None
+        provider_phones = None
+        raw_text = (getattr(resp, "text", "") or "").strip()
+        try:
+            root = ET.fromstring(raw_text)
+            for el in root.iter():
+                tag = el.tag or ""
+                if tag.endswith("status"):
+                    provider_status = (el.text or "").strip()
+                elif tag.endswith("id"):
+                    provider_id = (el.text or "").strip()
+                elif tag.endswith("phones"):
+                    provider_phones = (el.text or "").strip()
+        except Exception:
+            # keep meta with raw response for debugging
+            pass
+
+        ok = bool(ok_http)
+        if provider_status == "2":
+            ok = False
+        if provider_phones is not None:
+            try:
+                ok = ok and int(provider_phones) > 0
+            except Exception:
+                # if can't parse, don't fail solely because of it
+                pass
+
+        meta = {
+            "provider": "smspro",
+            "url": url,
+            "status_code": status_code,
+            "message_id": message_id,
+            "provider_status": provider_status,
+            "provider_id": provider_id,
+            "provider_phones": provider_phones,
+            # keep response reasonably small
+            "response": raw_text[:2000],
+        }
+
+        # mask phone in logs
+        phone_mask = (phone or "")
+        if len(phone_mask) > 4:
+            phone_mask = f"***{phone_mask[-4:]}"
+        # Use WARNING to ensure it appears with default gunicorn/Django log level.
+        logger.warning(
+            "SMSPro send result ok=%s phone=%s http=%s status=%s phones=%s id=%s",
+            ok,
+            phone_mask,
+            status_code,
+            provider_status,
+            provider_phones,
+            provider_id,
+        )
+
+        return ok, meta
+    except Exception as e:
+        logger.exception("SMS sending error")
+        return False, {
+            "provider": "smspro",
+            "url": url,
+            "exception": str(e),
+        }
 
 
 @method_decorator(csrf_exempt, name="dispatch")
@@ -325,7 +449,7 @@ class ProSendOtpAPIView(CsrfExemptAPIView):
         if settings.DEV_OTP_BYPASS and phone == settings.DEV_OTP_PHONE:
             code = settings.DEV_OTP_CODE
 
-        SMSCode.objects.create(
+        sms = SMSCode.objects.create(
             phone_number=phone,
             code=code,
             purpose=SMSCode.PURPOSE_PRO_LOGIN,
@@ -338,25 +462,21 @@ class ProSendOtpAPIView(CsrfExemptAPIView):
             payload["dev_code"] = code
         
         if not (settings.DEV_OTP_BYPASS and phone == settings.DEV_OTP_PHONE):
-            login = getattr(settings, "SMS_LOGIN", "")
-            password = getattr(settings, "SMS_PASSWORD", "")
-            sender = getattr(settings, "SMS_SENDER", "")
-            if login and password and sender:
-                xml_data = f"""<?xml version="1.0" encoding="UTF-8"?>
-<message>
-    <login>{login}</login>
-    <pwd>{password}</pwd>
-    <sender>{sender}</sender>
-    <text>Код подтверждения: {code}</text>
-    <phones>
-        <phone>{phone}</phone>
-    </phones>
-</message>"""
-                try:
-                    url = getattr(settings, "SMS_API_URL", "https://smspro.nikita.kg/api/message")
-                    requests.post(url, data=xml_data.encode('utf-8'), headers={"Content-Type": "application/xml"}, timeout=10)
-                except Exception as e:
-                    print(f"SMS sending error: {e}")
+            ok, meta = _send_sms_code(phone=phone, code=code)
+            if not ok:
+                # Do not keep unusable OTP code (prevents cooldown/limits from blocking the user)
+                sms.delete()
+                return Response(
+                    api_error(
+                        error="server_error",
+                        message="Не удалось отправить SMS",
+                        details=meta,
+                    ),
+                    status=500,
+                )
+            # store provider meta for support/debug
+            sms.payload = {**(sms.payload or {}), "smspro": meta}
+            sms.save(update_fields=["payload"])
         return Response(payload)
 
 
@@ -558,6 +678,89 @@ def _create_tokens_for_user(user):
 
 def health(request):
     return JsonResponse({"status": "ok", "release": getattr(settings, "RELEASE", "dev")})
+
+
+class PartnerBookingsAPIView(CsrfExemptAPIView):
+    authentication_classes = []
+    permission_classes = []
+    serializer_class = PartnerBookingSerializer
+    @extend_schema(
+        summary="PARTNER: список броней организации",
+        parameters=[
+            OpenApiParameter(name="Api-Key", type=str, location=OpenApiParameter.HEADER, required=True, description="Вставьте сюда ваш ключ (Swagger блокирует стандартный заголовок Authorization). Формат: API-Key ВАШ_ТОКЕН"),
+            OpenApiParameter(name="date_from", type=str, location=OpenApiParameter.QUERY, required=False, description="DD.MM.YYYY"),
+            OpenApiParameter(name="date_to", type=str, location=OpenApiParameter.QUERY, required=False, description="DD.MM.YYYY"),
+            OpenApiParameter(name="updated_since", type=str, location=OpenApiParameter.QUERY, required=False, description="ISO timestamp"),
+            OpenApiParameter(name="page", type=int, location=OpenApiParameter.QUERY, required=False),
+            OpenApiParameter(name="page_size", type=int, location=OpenApiParameter.QUERY, required=False),
+        ],
+        tags=["partner"],
+        responses={200: PartnerBookingSerializer(many=True)},
+    )
+    def get(self, request):
+        auth_header = request.META.get("HTTP_AUTHORIZATION") or request.META.get("HTTP_API_KEY", "")
+        if not auth_header:
+            return JsonResponse({"error": "Missing Authorization or Api-Key header"}, status=401)
+        
+        parts = auth_header.split()
+        if len(parts) == 2 and parts[0].lower() in ["api-key", "bearer"]:
+            token = parts[1]
+        elif len(parts) == 1:
+            token = parts[0]
+        else:
+            return JsonResponse({"error": "Invalid Authorization header format. Expected 'API-Key <token>' or just '<token>'"}, status=401)
+        try:
+            org = Organization.objects.get(api_key=token, is_active=True)
+        except Organization.DoesNotExist:
+            return JsonResponse({"error": "Invalid API Key"}, status=401)
+            
+        qs = Booking.objects.filter(
+            Q(branch__organization=org) | Q(professional__branches__organization=org)
+        ).select_related("client", "professional").distinct().order_by("-updated_at")
+
+        date_from = request.query_params.get("date_from")
+        date_to = request.query_params.get("date_to")
+        updated_since = request.query_params.get("updated_since")
+
+        if date_from:
+            try:
+                # Try DD.MM.YYYY first, fallback to ISO if needed
+                try:
+                    dt = timezone.datetime.strptime(date_from, "%d.%m.%Y").date()
+                except ValueError:
+                    dt = timezone.datetime.fromisoformat(date_from).date()
+                qs = qs.filter(booking_date__gte=dt)
+            except Exception:
+                pass
+        if date_to:
+            try:
+                try:
+                    dt = timezone.datetime.strptime(date_to, "%d.%m.%Y").date()
+                except ValueError:
+                    dt = timezone.datetime.fromisoformat(date_to).date()
+                qs = qs.filter(booking_date__lte=dt)
+            except Exception:
+                pass
+        if updated_since:
+            try:
+                dt = timezone.datetime.fromisoformat(updated_since.replace("Z", "+00:00"))
+                if not timezone.is_aware(dt):
+                    dt = timezone.make_aware(dt)
+                qs = qs.filter(updated_at__gte=dt)
+            except Exception:
+                pass
+
+        paginator = PageNumberPagination()
+        page_size = request.query_params.get("page_size")
+        if page_size and page_size.isdigit():
+            paginator.page_size = int(page_size)
+        else:
+            paginator.page_size = 50
+            
+        paginated_qs = paginator.paginate_queryset(qs, request, view=self)
+        from .serializers import PartnerBookingSerializer
+        return paginator.get_paginated_response(PartnerBookingSerializer(paginated_qs, many=True).data)
+
 
 
 class DefaultPagination(PageNumberPagination):
@@ -1834,7 +2037,7 @@ class OrganizationsAPIView(CsrfExemptAPIView):
                     "id": org.id,
                     "name": org.name,
                     "slug": getattr(org, "slug", ""),
-                    "logo_url": request.build_absolute_uri(org.logo.url) if getattr(org, "logo", None) else "",
+                    "logo_url": public_absolute_url(org.logo.url) if getattr(org, "logo", None) else "",
                     "paylink_enabled": getattr(org, "paylink_enabled", True),
                     "specialists_count": specialists_count,
                     "professionals_count": professionals_qs.count(),
@@ -1871,7 +2074,7 @@ class OrganizationDetailAPIView(CsrfExemptAPIView):
             "id": org.id,
             "name": org.name,
             "slug": getattr(org, "slug", ""),
-            "logo_url": request.build_absolute_uri(org.logo.url) if getattr(org, "logo", None) else "",
+            "logo_url": public_absolute_url(org.logo.url) if getattr(org, "logo", None) else "",
             "paylink_enabled": getattr(org, "paylink_enabled", True),
             "specialists_count": specialists_count,
             "professionals_count": qs.count(),
@@ -2470,16 +2673,25 @@ class CreatePaylinkAPIView(CsrfExemptAPIView):
             sep = "&" if "?" in redirect_url else "?"
             redirect_url = f"{redirect_url}{sep}tx={intent.transaction_id}"
 
-        base_url = (getattr(settings, "BAKAI_PAYLINK_BASE_URL", "https://openbanking-api.bakai.kg") or "").rstrip("/")
-        url = f"{base_url}/api/PayLink/CreatePayLink"
-        payload = {
-            "amount": amount,
-            "transactionID": str(intent.transaction_id),
-            "comment": intent.comment,
-            "redirectURL": redirect_url,
-            "ttlUnits": 0,
-            "ttl": 0,
-        }
+        base_url = (getattr(settings, "BAKAI_PAYLINK_BASE_URL", "https://pay.operator.kg") or "").rstrip("/")
+        # Check if using the new operator.kg API or legacy Bakai API
+        if "operator.kg" in base_url or "api/v1/payments" in base_url:
+            url = f"{base_url}/api/v1/payments/make-payment-link/"
+            payload = {
+                "amount": str(amount),
+                "transaction_id": str(intent.transaction_id),
+                "comment": intent.comment,
+                "redirect_url": redirect_url,
+                "token": token,
+            }
+        else:
+            url = f"{base_url}/api/PayLink/CreatePayLink"
+            payload = {
+                "amount": amount,
+                "transactionID": str(intent.transaction_id),
+                "comment": intent.comment,
+                "redirectURL": redirect_url,
+            }
 
         # DEV/QA mode: do not call real bank API
         if bool(getattr(settings, "PAYLINK_MOCK_ENABLED", False)):
@@ -2500,7 +2712,7 @@ class CreatePaylinkAPIView(CsrfExemptAPIView):
             r = requests.post(
                 url,
                 headers={
-                    "accept": "*/*",
+                    "accept": "application/json",
                     "Authorization": f"Bearer {token}",
                     "Content-Type": "application/json",
                 },
@@ -2508,7 +2720,20 @@ class CreatePaylinkAPIView(CsrfExemptAPIView):
                 timeout=20,
             )
             r.raise_for_status()
-            paylink_url = (r.text or "").strip().strip('"')
+            
+            # The new operator API might return a JSON response with the link. Let's try to extract it.
+            # But wait, Kuma's message doesn't specify response format. If it returns JSON, we parse it.
+            # If it returns raw string, we strip.
+            try:
+                resp_json = r.json()
+                if isinstance(resp_json, dict):
+                    paylink_url = resp_json.get("payment_url") or resp_json.get("paylink_url") or resp_json.get("url") or r.text.strip().strip('"')
+                elif isinstance(resp_json, str):
+                    paylink_url = resp_json.strip()
+                else:
+                    paylink_url = r.text.strip().strip('"')
+            except ValueError:
+                paylink_url = (r.text or "").strip().strip('"')
         except Exception as e:
             error_payload = {
                 "error": str(e),
@@ -2566,14 +2791,27 @@ class PaymentWebhookAPIView(CsrfExemptAPIView):
 
         # We need to extract transaction UUID from comment like: "Оплата заказа #375" or custom.
         comment = (data.get("comment") or "").strip()
+        operation_id = (data.get("operation_id") or "").strip()
 
         # Prefer strict UUID in comment if present
         tx_uuid = None
         m = re.search(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", comment)
         if m:
             tx_uuid = m.group(0)
+        
+        # Fallback to operation_id which Bakai API uses to return the original transactionID
+        if not tx_uuid and operation_id:
+            try:
+                # If it's a valid UUID (with or without hyphens)
+                import uuid
+                tx_uuid = str(uuid.UUID(operation_id))
+            except ValueError:
+                # Or try regex match just in case it contains a UUID inside some text
+                m2 = re.search(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", operation_id)
+                if m2:
+                    tx_uuid = m2.group(0)
 
-        # If no UUID in comment, try by operation_id mapping (not supported here), so fail.
+        # If no UUID in comment and operation_id, fail.
         if not tx_uuid:
             return Response(api_error(error="validation_error", message="Невалидные данные", details={"comment": ["Не найден transactionID"]}), status=400)
 
@@ -2696,7 +2934,7 @@ class SendOtpAPIView(CsrfExemptAPIView):
             code = f"{random.randint(0, 999999):06d}"
 
         expires_at = timezone.now() + timedelta(seconds=settings.OTP_EXPIRE_SECONDS)
-        SMSCode.objects.create(
+        sms = SMSCode.objects.create(
             phone_number=phone,
             code=code,
             purpose=SMSCode.PURPOSE_LOGIN,
@@ -2710,26 +2948,21 @@ class SendOtpAPIView(CsrfExemptAPIView):
         
         # Реальная отправка SMS (если не dev bypass)
         if not (settings.DEV_OTP_BYPASS and phone == settings.DEV_OTP_PHONE):
-            login = getattr(settings, "SMS_LOGIN", "")
-            password = getattr(settings, "SMS_PASSWORD", "")
-            sender = getattr(settings, "SMS_SENDER", "")
-
-            if login and password and sender:
-                xml_data = f"""<?xml version="1.0" encoding="UTF-8"?>
-<message>
-    <login>{login}</login>
-    <pwd>{password}</pwd>
-    <sender>{sender}</sender>
-    <text>Код подтверждения: {code}</text>
-    <phones>
-        <phone>{phone}</phone>
-    </phones>
-</message>"""
-                try:
-                    url = getattr(settings, "SMS_API_URL", "https://smspro.nikita.kg/api/message")
-                    requests.post(url, data=xml_data.encode('utf-8'), headers={"Content-Type": "application/xml"}, timeout=10)
-                except Exception as e:
-                    print(f"SMS sending error: {e}")
+            ok, meta = _send_sms_code(phone=phone, code=code)
+            if not ok:
+                # Do not keep unusable OTP code (prevents cooldown/limits from blocking the user)
+                sms.delete()
+                return Response(
+                    api_error(
+                        error="server_error",
+                        message="Не удалось отправить SMS",
+                        details=meta,
+                    ),
+                    status=500,
+                )
+            # store provider meta for support/debug
+            sms.payload = {**(sms.payload or {}), "smspro": meta}
+            sms.save(update_fields=["payload"])
 
         return Response(payload)
 

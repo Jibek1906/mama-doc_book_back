@@ -128,6 +128,14 @@ class Organization(models.Model):
             "даже если глобально включено."
         ),
     )
+    api_key = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        unique=True,
+        verbose_name="API-ключ",
+        help_text="Используется для интеграции (например, GET /partner/bookings/)"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -141,6 +149,9 @@ class Organization(models.Model):
     def save(self, *args, **kwargs):
         if not self.slug and self.name:
             self.slug = _make_unique_slug(model=Organization, base=self.name)
+        if not self.api_key:
+            import uuid
+            self.api_key = str(uuid.uuid4())
         super().save(*args, **kwargs)
 
 

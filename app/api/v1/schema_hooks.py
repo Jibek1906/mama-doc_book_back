@@ -52,10 +52,20 @@ def _extract_response_schema(operation: dict, status_code: str = "200") -> str |
     return None
 
 
-def _auth_note(operation: dict) -> str:
+def _auth_note(*, operation: dict, default_security: object | None) -> str:
     security = operation.get("security")
+    # OpenAPI semantics:
+    # - operation.security == []          -> explicitly public operation
+    # - operation.security is None/missing -> inherit global security (if any)
+    # - operation.security is non-empty   -> explicitly protected
     if security == []:
         return "Auth: не требуется"
+
+    # If operation has no explicit security and the schema has no global security,
+    # treat it as public.
+    if security is None and not default_security:
+        return "Auth: не требуется"
+
     return "Auth: Bearer token"
 
 
@@ -67,6 +77,8 @@ def postprocess_schema(result: dict, generator, request, public: bool):
     - response descriptions when missing
     """
 
+    default_security = result.get("security")
+
     for _, methods in result.get("paths", {}).items():
         for _, operation in methods.items():
             # Always enrich description (but keep existing, if provided)
@@ -77,7 +89,7 @@ def postprocess_schema(result: dict, generator, request, public: bool):
             generated = []
             if summary:
                 generated.append(summary)
-            generated.append(_auth_note(operation))
+            generated.append(_auth_note(operation=operation, default_security=default_security))
             if req_schema:
                 generated.append(f"Request body schema: {req_schema}")
             if resp_schema:
